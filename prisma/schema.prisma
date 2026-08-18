@@ -1,0 +1,456 @@
+// Prisma schema — merkee.shop API
+// Motor: PostgreSQL. DDL exclusivamente vía Prisma Migrate (nunca `db push`).
+// Convenciones: UUID públicos, timestamptz, dinero bigint COP, enums, soft delete,
+// `version` para optimistic locking y checks de precios/stock.
+//
+// Nota de diseño: los índices que Prisma no puede modelar (email único
+// case-insensitive y el índice parcial único de tokens de activación) se añaden
+// como SQL crudo dentro de las migraciones correspondientes (001 y 002).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Roles exclusivos del ecosistema. No existe auto-registro admin.
+enum UserRole {
+  admin
+  cliente
+}
+
+// Tipo de sesión: invitado (sin usuario) o autenticada (cliente/admin).
+enum SessionKind {
+  GUEST
+  AUTHENTICATED
+}
+
+// Estado de un carrito de compra servidor.
+enum CartStatus {
+  ACTIVE
+  CHECKOUT_PENDING
+  CLOSED
+  EXPIRED
+}
+
+// Estado de una reserva de stock por ítem de carrito.
+enum ReservationStatus {
+  ACTIVE
+  CHECKOUT_PENDING
+  CONSUMED
+  RELEASED
+  EXPIRED
+}
+
+// Estado de una orden.
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAID
+  PAYMENT_FAILED
+  PAYMENT_EXPIRED
+  RESERVATION_EXPIRED
+  PAYMENT_REFUND_PENDING
+  PAYMENT_REFUNDED
+  PAYMENT_REFUND_FAILED
+}
+
+// Estado de un pago.
+enum PaymentStatus {
+  PENDING
+  APPROVED
+  DECLINED
+  ERROR
+  EXPIRED
+  REFUNDED
+  REFUND_FAILED
+}
+
+// Estado de un reembolso.
+enum RefundStatus {
+  PENDING
+  REFUNDED
+  REFUND_FAILED
+}
+
+// Proveedor de pago soportado.
+enum PaymentProvider {
+  WOMPI
+  MERCADO_PAGO
+}
+
+// Estado de procesamiento de un evento de webhook de proveedor.
+enum WebhookEventStatus {
+  RECEIVED
+  PROCESSED
+  DUPLICATE
+  FAILED
+}
+
+// Estado de un evento de outbox.
+enum OutboxStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+model User {
+  id                 String   @id @default(uuid()) @db.Uuid
+  email              String   @db.VarChar(254)
+  passwordHash       String   @map("password_hash") @db.VarChar(255)
+  displayName        String   @map("display_name") @db.VarChar(100)
+  phone              String?  @db.VarChar(30)
+  role               UserRole
+  mustChangePassword Boolean  @map("must_change_password") @default(true)
+  createdAt          DateTime @map("created_at") @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime @map("updated_at") @updatedAt @db.Timestamptz(6)
+
+  sessions                    Session[]              @relation("SessionUser")
+  passwordResetTokens         PasswordResetToken[]   @relation("PasswordResetTokenUser")
+  adminActivationTokens       AdminActivationToken[] @relation("AdminActivationTokenUser")
+  adminActivationTokensCreated AdminActivationToken[] @relation("AdminActivationTokenCreator")
+  orders                      Order[]                @relation("OrderUser")
+  stockAdjustmentsCreated     ProductStockAdjustment[] @relation("StockAdjustmentAdmin")
+
+  @@index([email])
+  @@map("users")
+}
+
+model Session {
+  id               String      @id @default(uuid()) @db.Uuid
+  userId           String?     @map("user_id") @db.Uuid
+  sessionKind      SessionKind @map("session_kind")
+  refreshTokenHash String      @map("refresh_token_hash") @unique @db.VarChar(255)
+  expiresAt        DateTime    @map("expires_at") @db.Timestamptz(6)
+  lastActivityAt   DateTime    @map("last_activity_at") @db.Timestamptz(6)
+  revokedAt        DateTime?   @map("revoked_at") @db.Timestamptz(6)
+  createdAt        DateTime    @map("created_at") @default(now()) @db.Timestamptz(6)
+
+  user User? @relation("SessionUser", fields: [userId], references: [id], onDelete: Restrict)
+  cart Cart? @relation("SessionCart")
+
+  @@index([expiresAt])
+  @@index([userId])
+  @@map("sessions")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @map("token_hash") @unique @db.VarChar(255)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  createdAt DateTime  @map("created_at") @default(now()) @db.Timestamptz(6)
+
+  user User @relation("PasswordResetTokenUser", fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([expiresAt])
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+model AdminActivationToken {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  tokenHash        String    @map("token_hash") @unique @db.VarChar(255)
+  expiresAt        DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt           DateTime? @map("used_at") @db.Timestamptz(6)
+  createdByUserId  String    @map("created_by_user_id") @db.Uuid
+  createdAt        DateTime  @map("created_at") @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime  @map("updated_at") @updatedAt @db.Timestamptz(6)
+
+  user    User @relation("AdminActivationTokenUser", fields: [userId], references: [id], onDelete: Restrict)
+  creator User @relation("AdminActivationTokenCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  @@index([expiresAt, usedAt])
+  @@index([userId, usedAt])
+  @@map("admin_activation_tokens")
+}
+
+// Registro de idempotencia (provisión de admin). Único por (scope, key);
+// `body_hash` detecta reproducción divergente y `response_json` reproduce la
+// respuesta original en reintentos idempotentes. No almacena secretos.
+model IdempotencyRecord {
+  id             String   @id @default(uuid()) @db.Uuid
+  scope          String   @db.VarChar(255)
+  idempotencyKey String   @map("idempotency_key") @db.Uuid
+  bodyHash       String   @map("body_hash") @db.VarChar(64)
+  responseJson   Json     @map("response_json") @db.JsonB
+  createdAt      DateTime @map("created_at") @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime @map("updated_at") @updatedAt @db.Timestamptz(6)
+
+  @@unique([scope, idempotencyKey])
+  @@index([createdAt])
+  @@map("idempotency_records")
+}
+
+model Category {
+  id        String    @id @default(uuid()) @db.Uuid
+  name      String    @db.VarChar(100)
+  imageKey  String    @map("image_key")
+  version   Int       @default(1)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt DateTime  @map("created_at") @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime  @map("updated_at") @updatedAt @db.Timestamptz(6)
+
+  products Product[]
+
+  @@map("categories")
+}
+
+model Product {
+  id              String   @id @default(uuid()) @db.Uuid
+  categoryId      String   @map("category_id") @db.Uuid
+  name            String   @db.VarChar(160)
+  description     String   @db.Text
+  regularPriceCop BigInt   @map("regular_price_cop") @db.BigInt
+  salePriceCop    BigInt   @map("sale_price_cop") @db.BigInt
+  unit            String   @db.VarChar(40)
+  stockOnHand     Int      @map("stock_on_hand")
+  stockReserved   Int      @map("stock_reserved") @default(0)
+  version         Int      @default(1)
+  deletedAt       DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt       DateTime @map("created_at") @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime @map("updated_at") @updatedAt @db.Timestamptz(6)
+
+  category          Category                @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  images            ProductImage[]
+  cartItems         CartItem[]
+  stockReservations StockReservation[]
+  orderItems        OrderItem[]
+  stockAdjustments  ProductStockAdjustment[]
+
+  @@index([categoryId])
+  @@map("products")
+}
+
+model ProductImage {
+  id        String   @id @default(uuid()) @db.Uuid
+  productId String   @map("product_id") @db.Uuid
+  key       String
+  altText   String   @map("alt_text") @db.VarChar(160)
+  position  Int
+  createdAt DateTime @map("created_at") @default(now()) @db.Timestamptz(6)
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([productId])
+  @@map("product_images")
+}
+
+model Banner {
+  id           String    @id @default(uuid()) @db.Uuid
+  name         String    @db.VarChar(160)
+  imageKey     String    @map("image_key")
+  targetPath   String?   @map("target_path")
+  displayOrder Int       @map("display_order")
+  active       Boolean
+  version      Int       @default(1)
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt    DateTime  @map("created_at") @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime  @map("updated_at") @updatedAt @db.Timestamptz(6)
+
+  @@map("banners")
+}
+
+// Carrito de compra servidor. 1:1 con la sesión (session_id UNIQUE).
+// Los totales COP se persisten para servir CartResponse sin recálculo en lectura.
+model Cart {
+  id                   String      @id @default(uuid()) @db.Uuid
+  sessionId            String      @map("session_id") @unique @db.Uuid
+  status               CartStatus
+  itemsSubtotalCop     BigInt      @map("items_subtotal_cop") @db.BigInt
+  deliveryFeeCop       BigInt      @map("delivery_fee_cop") @default(5000) @db.BigInt
+  ivaCop               BigInt      @map("iva_cop") @db.BigInt
+  taxRateBasisPoints   Int         @map("tax_rate_basis_points") @default(1900)
+  totalCop             BigInt      @map("total_cop") @db.BigInt
+  reservationExpiresAt DateTime?   @map("reservation_expires_at") @db.Timestamptz(6)
+  createdAt            DateTime    @map("created_at") @default(now()) @db.Timestamptz(6)
+  updatedAt            DateTime    @map("updated_at") @updatedAt @db.Timestamptz(6)
+
+  session Session    @relation("SessionCart", fields: [sessionId], references: [id], onDelete: Restrict)
+  items   CartItem[]
+  order   Order?
+
+  @@map("carts")
+}
+
+// Ítem de carrito. Único por carrito/producto (UNIQUE cart_id+product_id).
+model CartItem {
+  id           String   @id @default(uuid()) @db.Uuid
+  cartId       String   @map("cart_id") @db.Uuid
+  productId    String   @map("product_id") @db.Uuid
+  quantity     Int
+  unitPriceCop BigInt   @map("unit_price_cop") @db.BigInt
+  subtotalCop  BigInt   @map("subtotal_cop") @db.BigInt
+  createdAt    DateTime @map("created_at") @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime @map("updated_at") @updatedAt @db.Timestamptz(6)
+
+  cart        Cart              @relation(fields: [cartId], references: [id], onDelete: Restrict)
+  product     Product           @relation(fields: [productId], references: [id], onDelete: Restrict)
+  reservation StockReservation?
+
+  @@unique([cartId, productId])
+  @@index([productId])
+  @@map("cart_items")
+}
+
+// Reserva de stock por ítem de carrito. 1:1 con el ítem (cart_item_id UNIQUE).
+// ACTIVE expirable (expires_at); CHECKOUT_PENDING sin expiración (expires_at NULL).
+model StockReservation {
+  id         String            @id @default(uuid()) @db.Uuid
+  cartItemId String            @map("cart_item_id") @unique @db.Uuid
+  productId  String            @map("product_id") @db.Uuid
+  quantity   Int
+  status     ReservationStatus
+  expiresAt  DateTime?         @map("expires_at") @db.Timestamptz(6)
+  createdAt  DateTime          @map("created_at") @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime          @map("updated_at") @updatedAt @db.Timestamptz(6)
+
+  cartItem CartItem @relation(fields: [cartItemId], references: [id], onDelete: Restrict)
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([status, expiresAt])
+  @@index([productId])
+  @@map("stock_reservations")
+}
+
+// Orden. Única por carrito (cart_id UNIQUE). Snapshots de dirección NOT NULL.
+model Order {
+  id                    String      @id @default(uuid()) @db.Uuid
+  orderNumber           String      @map("order_number") @unique @db.VarChar(40)
+  cartId                String      @map("cart_id") @unique @db.Uuid
+  userId                String      @map("user_id") @db.Uuid
+  status                OrderStatus
+  itemsSubtotalCop      BigInt      @map("items_subtotal_cop") @db.BigInt
+  deliveryFeeCop        BigInt      @map("delivery_fee_cop") @default(5000) @db.BigInt
+  ivaCop                BigInt      @map("iva_cop") @db.BigInt
+  taxRateBasisPoints    Int         @map("tax_rate_basis_points") @default(1900)
+  totalCop              BigInt      @map("total_cop") @db.BigInt
+  deliveryRecipientName String      @map("delivery_recipient_name") @db.VarChar(100)
+  deliveryLine1         String      @map("delivery_line1") @db.VarChar(180)
+  deliveryCity          String      @map("delivery_city") @db.VarChar(100)
+  deliveryPhone         String      @map("delivery_phone") @db.VarChar(30)
+  createdAt             DateTime    @map("created_at") @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime    @map("updated_at") @updatedAt @db.Timestamptz(6)
+
+  cart     Cart         @relation(fields: [cartId], references: [id], onDelete: Restrict)
+  user     User         @relation("OrderUser", fields: [userId], references: [id], onDelete: Restrict)
+  items    OrderItem[]
+  payments Payment[]
+
+  @@index([userId])
+  @@index([status])
+  @@map("orders")
+}
+
+// Ítem de orden con snapshots de producto (nombre/unit/precio) al momento del checkout.
+model OrderItem {
+  id           String   @id @default(uuid()) @db.Uuid
+  orderId      String   @map("order_id") @db.Uuid
+  productId    String?  @map("product_id") @db.Uuid
+  productName  String   @map("product_name") @db.VarChar(160)
+  unit         String   @db.VarChar(40)
+  unitPriceCop BigInt   @map("unit_price_cop") @db.BigInt
+  quantity     Int
+  subtotalCop  BigInt   @map("subtotal_cop") @db.BigInt
+  createdAt    DateTime @map("created_at") @default(now()) @db.Timestamptz(6)
+
+  order   Order    @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  product Product? @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+// Pago. Idempotencia única por intención (idempotency_key UNIQUE).
+model Payment {
+  id                String          @id @default(uuid()) @db.Uuid
+  orderId           String          @map("order_id") @db.Uuid
+  provider          PaymentProvider
+  status            PaymentStatus
+  amountCop         BigInt          @map("amount_cop") @db.BigInt
+  providerReference String?         @map("provider_reference") @db.VarChar(255)
+  idempotencyKey    String          @map("idempotency_key") @unique @db.Uuid
+  createdAt         DateTime        @map("created_at") @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime        @map("updated_at") @updatedAt @db.Timestamptz(6)
+
+  order   Order            @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  refunds PaymentRefund[]
+
+  @@index([orderId])
+  @@index([status])
+  @@map("payments")
+}
+
+// Reembolso. Único por pago (payment_id UNIQUE) e idempotente (idempotency_key UNIQUE).
+model PaymentRefund {
+  id                      String       @id @default(uuid()) @db.Uuid
+  paymentId               String       @map("payment_id") @unique @db.Uuid
+  status                  RefundStatus
+  amountCop               BigInt       @map("amount_cop") @db.BigInt
+  providerRefundReference String?      @map("provider_refund_reference") @db.VarChar(255)
+  idempotencyKey          String       @map("idempotency_key") @unique @db.Uuid
+  createdAt               DateTime     @map("created_at") @default(now()) @db.Timestamptz(6)
+  updatedAt               DateTime     @map("updated_at") @updatedAt @db.Timestamptz(6)
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  @@map("payment_refunds")
+}
+
+// Evento de webhook de proveedor. Deduplicado por (provider, provider_event_id).
+// Solo se persiste tras validar la firma sobre el raw body.
+model PaymentWebhookEvent {
+  id              String              @id @default(uuid()) @db.Uuid
+  provider        PaymentProvider
+  providerEventId String              @map("provider_event_id") @db.VarChar(255)
+  eventType       String?             @map("event_type") @db.VarChar(100)
+  payload         Json                @db.JsonB
+  status          WebhookEventStatus
+  receivedAt      DateTime            @map("received_at") @default(now()) @db.Timestamptz(6)
+  processedAt     DateTime?           @map("processed_at") @db.Timestamptz(6)
+
+  @@unique([provider, providerEventId])
+  @@index([status])
+  @@map("payment_webhook_events")
+}
+
+// Evento de outbox para efectos no críticos desacoplados (ADR-007).
+model OutboxEvent {
+  id            String       @id @default(uuid()) @db.Uuid
+  eventType     String       @map("event_type") @db.VarChar(100)
+  aggregateType String       @map("aggregate_type") @db.VarChar(100)
+  aggregateId   String       @map("aggregate_id") @db.Uuid
+  payload       Json         @db.JsonB
+  status        OutboxStatus
+  createdAt     DateTime     @map("created_at") @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime     @map("updated_at") @updatedAt @db.Timestamptz(6)
+
+  @@index([status, createdAt])
+  @@map("outbox_events")
+}
+
+// Auditoría inmutable de ajustes de stock (append-only). Nunca escribe stock_reserved.
+model ProductStockAdjustment {
+  id                String   @id @default(uuid()) @db.Uuid
+  productId         String   @map("product_id") @db.Uuid
+  adminUserId       String   @map("admin_user_id") @db.Uuid
+  quantityDelta     Int      @map("quantity_delta")
+  reason            String   @db.VarChar(500)
+  stockOnHandBefore Int      @map("stock_on_hand_before")
+  stockOnHandAfter  Int      @map("stock_on_hand_after")
+  stockReserved     Int      @map("stock_reserved")
+  stockAvailable    Int      @map("stock_available")
+  idempotencyKey    String   @map("idempotency_key") @unique @db.Uuid
+  createdAt         DateTime @map("created_at") @default(now()) @db.Timestamptz(6)
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  admin   User    @relation("StockAdjustmentAdmin", fields: [adminUserId], references: [id], onDelete: Restrict)
+
+  @@index([productId])
+  @@index([adminUserId])
+  @@map("product_stock_adjustments")
+}
