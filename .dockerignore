@@ -1,0 +1,72 @@
+# =============================================================================
+# .dockerignore — merkee-shop-api
+# Excluir archivos que no deben entrar al contexto de Docker
+# =============================================================================
+
+# Dependencias
+node_modules/
+.pnp
+.pnp.js
+
+# Builds y artefactos generados
+dist/
+build/
+coverage/
+.turbo/
+.cache/
+out/
+*.tsbuildinfo
+
+# Entornos y secretos
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# Git
+.git/
+.gitignore
+
+# Tests y coverage
+test/
+**/*.spec.ts
+**/*.test.ts
+jest.integration.config.js
+jest-e2e.json
+coverage/
+
+# Documentación
+docs/
+*.md
+!package.json
+
+# IDEs y editores
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Archivos temporales del sistema
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# Scripts de desarrollo
+scripts/
+
+# Dependency cruiser
+.dependency-cruiser.cjs
+dependency-graph.svg
+
+# Archivos de configuración de CI/CD
+.github/
