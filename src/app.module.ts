@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { HttpModule } from './shared/http/http.module';
+import { HealthModule } from './shared/http/health.module';
 import { IdentityModule } from './modules/identity/identity.module';
 import { MediaModule } from './modules/media/media.module';
 import { CatalogModule } from './modules/catalog/catalog.module';
@@ -21,6 +22,7 @@ import { AdminQueryModule } from './modules/admin-query/admin-query.module';
 @Module({
   imports: [
     HttpModule,
+    HealthModule,
     IdentityModule,
     MediaModule,
     CatalogModule,
