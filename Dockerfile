@@ -50,9 +50,12 @@ COPY package.json tsconfig.json tsconfig.build.json nest-cli.json ./
 COPY prisma ./prisma
 COPY src ./src
 
-# Generar cliente Prisma (requiere DATABASE_URL dummy para generate)
+# Generar cliente Prisma con engines multi-plataforma (native + debian-openssl-1.1.x + 3.0.x)
+# Los targets se definen en schema.prisma vía binaryTargets; no se usa sed.
 ENV DATABASE_URL="postgresql://dummy:dummy@localhost:5432/dummy"
-RUN npx prisma generate
+RUN npx prisma generate && \
+    echo "--- Prisma engines generados ---" && \
+    find node_modules/.prisma -name "*.node" -exec echo "  engine: {}" \; 2>/dev/null || true
 
 # Compilar TypeScript (nest build)
 RUN npm run build
@@ -94,6 +97,11 @@ COPY --from=build --chown=node:node /app/package.json ./
 
 # Copiar prisma schema y migraciones (necesarios para prisma migrate deploy externo)
 COPY --from=build --chown=node:node /app/prisma ./prisma
+
+# Verificar engines Prisma disponibles en runtime
+RUN echo "--- Prisma engines en runtime ---" && \
+    ls -la node_modules/.prisma/client/ && \
+    find node_modules/@prisma -name "*.node" 2>/dev/null || true
 
 # Variables de entorno de runtime
 ENV NODE_ENV=production
