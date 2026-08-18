@@ -1,17 +1,20 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { S3Client } from '@aws-sdk/client-s3';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { MediaStoragePort, UploadUrl } from '../../domain/ports/media-storage.port';
 
 /**
  * Adapter de salida de almacenamiento S3 real (infrastructure).
  *
- * Genera URLs prefirmadas usando AWS SDK v3 cuando está disponible.
+ * Genera URLs prefirmadas usando AWS SDK v3.
  * Requiere las variables de entorno:
  * - `AWS_REGION`: región de S3
  * - `S3_BUCKET_NAME`: nombre del bucket privado de media
  * - `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (o IAM role)
  *
- * Si el SDK no está instalado o las variables faltan, lanza un error
- * técnico en el límite del adapter (no propagate excepciones crudas).
+ * Las credenciales NUNCA se pasan por código; el SDK las resuelve
+ * automáticamente desde el environment o el EC2 instance role.
  *
  * No expone credenciales en logs, métricas ni responses.
  * No almacena PAN/CVV ni datos sensibles del cliente.
@@ -38,32 +41,6 @@ export class S3MediaStorageAdapter implements MediaStoragePort {
         'S3MediaStorageAdapter: AWS_REGION or S3_BUCKET_NAME not configured',
       );
       throw new Error('S3 configuration missing');
-    }
-
-    // Intentar cargar AWS SDK v3 dinámicamente
-    // Nota: @aws-sdk debe estar en dependencies para usar este adapter.
-    // Si no está instalado, se lanza un error claro.
-    let S3Client: new (config: Record<string, unknown>) => Record<string, unknown>;
-    let PutObjectCommand: new (input: Record<string, unknown>) => Record<string, unknown>;
-    let getSignedUrl: (
-      client: Record<string, unknown>,
-      command: Record<string, unknown>,
-      options: Record<string, unknown>,
-    ) => Promise<string>;
-
-    try {
-      // @ts-ignore — @aws-sdk es opcional; se importa dinámicamente
-      const s3Module = await import('@aws-sdk/client-s3');
-      // @ts-ignore — @aws-sdk es opcional; se importa dinámicamente
-      const presignerModule = await import('@aws-sdk/s3-request-presigner');
-      S3Client = s3Module.S3Client;
-      PutObjectCommand = s3Module.PutObjectCommand;
-      getSignedUrl = presignerModule.getSignedUrl;
-    } catch {
-      this.logger.error(
-        'S3MediaStorageAdapter: @aws-sdk packages not installed. Install @aws-sdk/client-s3 and @aws-sdk/s3-request-presigner.',
-      );
-      throw new Error('AWS SDK not available');
     }
 
     try {
