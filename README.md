@@ -140,7 +140,16 @@ npm run start:dev                  # watch
 npm run build && npm run start:prod
 ```
 
-La API escucha en `PORT` (default 3000). El bootstrap del admin inicial
+La API escucha en `PORT` (default 3000). Existe un endpoint de liveness
+`GET /health` (sin autenticación, sin acceso a BD ni secretos; ver
+`src/shared/http/health.controller.ts`, registrado en `HealthModule` e importado
+por `app.module.ts`). **Nota de despliegue:** el `Dockerfile` tiene un comentario
+stale que afirma lo contrario; el endpoint SÍ está presente en la fuente actual.
+El estado del despliegue ECS, el health check y la alineación de puertos se
+documentan en `docs/DEPLOYMENT_STATUS.md` (incidente actual: rollback/circuit
+breaker, P1001 ya corregido, puertos/health check desalineados).
+
+El bootstrap del admin inicial
 (`cristiansrc@gmail.com`, `must_change_password=true`) se ejecuta al arrancar si
 `BOOTSTRAP_INITIAL_ADMIN_ENABLED=true` y el secreto externo está presente; si
 falta el secreto, falla de forma segura sin crear usuario.
@@ -187,14 +196,37 @@ npm run depcruise        # prueba de arquitectura (dependency-cruiser)
   logout` (ROP sign, TD-NEW-ROP-SIGN, incremento `msf-id-rop-sign-cleanup`
   en `planning`); protecciones HTTP de borde (TD-NEW-HTTP-SEC).
 
-## Estado de AWS
+## Estado de AWS (revisado 2026-08-18)
 
-**AWS no está configurado.** Localmente: la API corre como proceso NestJS,
-PostgreSQL en Docker, Prisma Migrate, scheduler de purga cableado al arranque y
-métricas vía `prom-client`. Pendiente de configuración AWS: ECS Fargate, RDS
-gestionado, S3+CloudFront/OAC, Secrets Manager, CloudWatch (destino de métricas),
-SNS/SQS/DLQ, Route53/ACM, KMS, IAM/OIDC (TD-MSF-ID-002-03). No se solicitan
-secretos por chat.
+**AWS configurado** en cuenta de aprendizaje, región `us-east-1`, un único
+ambiente. Estado del despliegue: **en despliegue / pendiente de verificación**
+(task definition `merkee-backend-task` revision 2 con `taskRole`
+`merkee-backend-task-role` y mapeo `secrets` JSON; servicio `merkee-backend-service`
+con running/health check por confirmar). No se afirma despliegue productivo
+terminado.
+
+- **Imagen:** Dockerfile multi-stage no-root creado y **build local validado**;
+  repositorio ECR `merkee-backend-api` existe; push/despliegue pendiente de
+  verificación.
+- **Secretos:** el secreto `merkee/app` (AWS Secrets Manager) está creado y es
+  referenciado por la task definition vía mapeo `secrets` JSON. **No se exponen
+  valores.** Las variables inyectadas son las del cuadro `Variables de entorno`
+  (solo nombres); en AWS provienen de ese secreto, no de `.env` local.
+- **RDS `merkee-db`:** existe; auditoría indicó `PubliclyAccessible=True` como
+  riesgo pendiente (no se afirma corrección).
+- **CI/CD:** workflows GitHub Actions migrados a OIDC (`merkee-github-actions-deploy`);
+  validación CI antes de deploy. CI anterior falló por OIDC/permissions y secreto
+  CloudFront vacío; fixes aplicados, pero no se afirma que el deploy final terminó.
+- **Pendiente de verificación / deuda:** validación final ECS (TD-AWS-ECS-VALIDATION),
+  RDS público (TD-AWS-RDS-PUBLIC), alarms/observabilidad CloudWatch
+  (TD-AWS-OBSERVABILITY) y `swagger.merkee.shop` (TD-AWS-SWAGGER-DNS).
+- **Incidente de despliegue actual:** ver `docs/DEPLOYMENT_STATUS.md` (ECS en
+  rollback/circuit breaker; P1001 por conectividad RDS ya corregido; desalineación
+  de puertos app 3000 / task 80 / target group 8080 y health check `/health`
+  pendiente de alinear). No se afirma servicio sano.
+
+No se solicitan secretos por chat. La configuración de infra no altera el estado
+de las specs (`validated-not-executed`); es estado operativo adicional.
 
 ## Pendientes de decisión
 
