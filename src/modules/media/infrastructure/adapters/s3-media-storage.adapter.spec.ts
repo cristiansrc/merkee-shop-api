@@ -1,70 +1,121 @@
 import { S3MediaStorageAdapter } from './s3-media-storage.adapter';
 
+// Mock de @aws-sdk/client-s3
+jest.mock('@aws-sdk/client-s3', () => {
+  const mockSend = jest.fn().mockResolvedValue({});
+  return {
+    S3Client: jest.fn().mockImplementation(() => ({ send: mockSend })),
+    PutObjectCommand: jest.fn().mockImplementation((input) => input),
+  };
+});
+
+// Mock de @aws-sdk/s3-request-presigner
+jest.mock('@aws-sdk/s3-request-presigner', () => ({
+  getSignedUrl: jest.fn().mockResolvedValue('https://s3.test-bucket.amazonaws.com/signed-url'),
+}));
+
 describe('S3MediaStorageAdapter', () => {
-  let adapter: S3MediaStorageAdapter;
+  const originalEnv = { ...process.env };
 
   beforeEach(() => {
-    adapter = new S3MediaStorageAdapter(300);
+    jest.clearAllMocks();
+    process.env = { ...originalEnv };
+    process.env.AWS_REGION = 'us-east-1';
+    process.env.S3_BUCKET_NAME = 'test-bucket';
+  });
+
+  afterAll(() => {
+    process.env = originalEnv;
   });
 
   it('lanza error cuando AWS_REGION no está configurado', async () => {
-    const originalRegion = process.env.AWS_REGION;
-    const originalBucket = process.env.S3_BUCKET_NAME;
     delete process.env.AWS_REGION;
     process.env.S3_BUCKET_NAME = 'test-bucket';
 
+    const adapter = new S3MediaStorageAdapter(300);
     await expect(
       adapter.createUploadUrl('key', 'image/jpeg', 1024),
     ).rejects.toThrow('S3 configuration missing');
-
-    if (originalRegion) process.env.AWS_REGION = originalRegion;
-    if (originalBucket) process.env.S3_BUCKET_NAME = originalBucket;
   });
 
   it('lanza error cuando S3_BUCKET_NAME no está configurado', async () => {
-    const originalRegion = process.env.AWS_REGION;
-    const originalBucket = process.env.S3_BUCKET_NAME;
     process.env.AWS_REGION = 'us-east-1';
     delete process.env.S3_BUCKET_NAME;
 
+    const adapter = new S3MediaStorageAdapter(300);
     await expect(
       adapter.createUploadUrl('key', 'image/jpeg', 1024),
     ).rejects.toThrow('S3 configuration missing');
-
-    if (originalRegion) process.env.AWS_REGION = originalRegion;
-    if (originalBucket) process.env.S3_BUCKET_NAME = originalBucket;
-  });
-
-  it('lanza error cuando @aws-sdk no está instalado', async () => {
-    process.env.AWS_REGION = 'us-east-1';
-    process.env.S3_BUCKET_NAME = 'test-bucket';
-
-    await expect(
-      adapter.createUploadUrl('key', 'image/jpeg', 1024),
-    ).rejects.toThrow('AWS SDK not available');
   });
 
   it('lanza error cuando ambos region y bucket faltan', async () => {
-    const originalRegion = process.env.AWS_REGION;
-    const originalBucket = process.env.S3_BUCKET_NAME;
     delete process.env.AWS_REGION;
     delete process.env.S3_BUCKET_NAME;
 
+    const adapter = new S3MediaStorageAdapter(300);
     await expect(
       adapter.createUploadUrl('key', 'image/jpeg', 1024),
     ).rejects.toThrow('S3 configuration missing');
-
-    if (originalRegion) process.env.AWS_REGION = originalRegion;
-    if (originalBucket) process.env.S3_BUCKET_NAME = originalBucket;
   });
 
-  it('usa TTL por defecto de 300 segundos', () => {
-    const defaultAdapter = new S3MediaStorageAdapter();
-    expect(defaultAdapter).toBeDefined();
+  it('genera URL prefirmada cuando configuración es válida', async () => {
+    const { getSignedUrl } = await import('@aws-sdk/s3-request-presigner');
+    const { S3Client, PutObjectCommand } = await import('@aws-sdk/client-s3');
+
+    const adapter = new S3MediaStorageAdapter(300);
+    const result = await adapter.createUploadUrl('media/test.jpg', 'image/jpeg', 2048);
+
+    expect(S3Client).toHaveBeenCalledWith({ region: 'us-east-1' });
+    expect(PutObjectCommand).toHaveBeenCalledWith({
+      Bucket: 'test-bucket',
+      Key: 'media/test.jpg',
+      ContentType: 'image/jpeg',
+      ContentLength: 2048,
+      ACL: 'private',
+    });
+    expect(getSignedUrl).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      { expiresIn: 300 },
+    );
+    expect(result.url).toBe('https://s3.test-bucket.amazonaws.com/signed-url');
+    expect(result.expiresAt).toBeInstanceOf(Date);
+    expect(result.expiresAt.getTime()).toBeGreaterThan(Date.now());
   });
 
-  it('usa TTL personalizado cuando se proporciona', () => {
-    const customAdapter = new S3MediaStorageAdapter(600);
-    expect(customAdapter).toBeDefined();
+  it('usa TTL personalizado', async () => {
+    const { getSignedUrl } = await import('@aws-sdk/s3-request-presigner');
+
+    const adapter = new S3MediaStorageAdapter(600);
+    await adapter.createUploadUrl('media/test.png', 'image/png', 1024);
+
+    expect(getSignedUrl).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      { expiresIn: 600 },
+    );
+  });
+
+  it('usa TTL por defecto de 300 segundos', async () => {
+    const { getSignedUrl } = await import('@aws-sdk/s3-request-presigner');
+
+    const adapter = new S3MediaStorageAdapter();
+    await adapter.createUploadUrl('media/test.png', 'image/png', 1024);
+
+    expect(getSignedUrl).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      { expiresIn: 300 },
+    );
+  });
+
+  it('lanza error técnico cuando S3 falla', async () => {
+    const { getSignedUrl } = await import('@aws-sdk/s3-request-presigner');
+    (getSignedUrl as jest.Mock).mockRejectedValueOnce(new Error('S3 access denied'));
+
+    const adapter = new S3MediaStorageAdapter(300);
+    await expect(
+      adapter.createUploadUrl('key', 'image/jpeg', 1024),
+    ).rejects.toThrow('S3 presigned URL generation failed: S3 access denied');
   });
 });
