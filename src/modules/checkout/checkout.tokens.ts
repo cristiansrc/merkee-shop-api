@@ -1,0 +1,13 @@
+/**
+ * Tokens de inyección de dependencias del módulo `checkout`.
+ */
+export const CHECKOUT_TOKENS = {
+  // Puertos de salida
+  CHECKOUT_RESERVATION: 'CHECKOUT_RESERVATION',
+  CHECKOUT_REPOSITORY: 'CHECKOUT_REPOSITORY',
+  CHECKOUT_PRODUCT_LOOKUP: 'CHECKOUT_PRODUCT_LOOKUP',
+  CHECKOUT_UNIT_OF_WORK: 'CHECKOUT_UNIT_OF_WORK',
+
+  // Casos de uso
+  CREATE_CHECKOUT_USE_CASE: 'CHECKOUT_CREATE_CHECKOUT_USE_CASE',
+} as const;
