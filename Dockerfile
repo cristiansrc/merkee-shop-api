@@ -79,9 +79,14 @@ LABEL maintainer="merkee-shop-team"
 LABEL description="merkee-shop-api — NestJS + Prisma backend"
 LABEL version="0.1.0"
 
-# Instalar dependencias del sistema para argon2 en runtime
+# Instalar dependencias del sistema para runtime:
+#   - libargon2-1: runtime nativo de argon2 (hashing de passwords)
+#   - openssl: proporciona libssl3 + symlinks no versionados (libssl.so, libcrypto.so)
+#     necesarios para que Prisma detecte correctamente OpenSSL 3.0.x y cargue
+#     el engine debian-openssl-3.0.x en vez de fallar con libssl.so.1.1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libargon2-1 \
+    openssl \
     && rm -rf /var/lib/apt/lists/*
 
 # Crear directorio de trabajo
