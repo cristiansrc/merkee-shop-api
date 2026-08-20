@@ -1,4 +1,4 @@
-import { Module, Provider } from '@nestjs/common';
+import { Global, Module, Provider } from '@nestjs/common';
 import { PrismaModule } from '../cart-reservation/infrastructure/prisma.module';
 import { CartReservationModule } from '../cart-reservation/cart-reservation.module';
 import { CART_TOKENS } from '../cart-reservation/cart-reservation.tokens';
@@ -9,6 +9,9 @@ import { ChangePasswordUseCase } from './application/use-cases/change-password.u
 import { ChangePasswordUnitOfWorkUseCase } from './application/use-cases/change-password-unit-of-work.use-case';
 import { RequestPasswordResetUseCase } from './application/use-cases/request-password-reset.use-case';
 import { ResetPasswordUseCase } from './application/use-cases/reset-password.use-case';
+import { LoginUseCase } from './application/use-cases/login.use-case';
+import { RefreshSessionUseCase } from './application/use-cases/refresh-session.use-case';
+import { LogoutUseCase } from './application/use-cases/logout.use-case';
 import { IdentityController } from './identity.controller';
 import { PrismaUserRepositoryAdapter } from './infrastructure/adapters/prisma-user-repository.adapter';
 import { PrismaSessionRepositoryAdapter } from './infrastructure/adapters/prisma-session-repository.adapter';
@@ -36,6 +39,7 @@ import { PasswordResetTokenRepositoryPort } from './domain/ports/password-reset-
 import { EmailPort } from './domain/ports/email.port';
 import { ResetPasswordUnitOfWorkPort } from './domain/ports/reset-password-unit-of-work.port';
 import { RequestPasswordResetUnitOfWorkPort } from './domain/ports/request-password-reset-unit-of-work.port';
+import { CartReservationPort } from './domain/ports/cart-reservation.port';
 
 /** TTL del cookie rotado de refresh alineado con sesiones (10 minutos). */
 const DEFAULT_REFRESH_COOKIE_TTL_MS = 10 * 60 * 1000;
@@ -252,16 +256,87 @@ const resetPasswordUseCaseProvider: Provider = {
   ],
 };
 
+const loginUseCaseProvider: Provider = {
+  provide: IDENTITY_TOKENS.LOGIN_USE_CASE,
+  useFactory: (
+    userRepo: UserRepositoryPort,
+    sessionRepo: SessionRepositoryPort,
+    passwordHasher: PasswordHasherPort,
+    jwt: JwtPort,
+    cookieToken: CookieTokenPort,
+    clock: ClockPort,
+    cartReservation: CartReservationPort,
+  ): LoginUseCase =>
+    new LoginUseCase(
+      userRepo,
+      sessionRepo,
+      passwordHasher,
+      jwt,
+      cookieToken,
+      clock,
+      cartReservation,
+    ),
+  inject: [
+    IDENTITY_TOKENS.USER_REPOSITORY,
+    IDENTITY_TOKENS.SESSION_REPOSITORY,
+    IDENTITY_TOKENS.PASSWORD_HASHER,
+    IDENTITY_TOKENS.JWT,
+    IDENTITY_TOKENS.COOKIE_TOKEN,
+    IDENTITY_TOKENS.CLOCK,
+    IDENTITY_TOKENS.CART_RESERVATION,
+  ],
+};
+
+const refreshSessionUseCaseProvider: Provider = {
+  provide: IDENTITY_TOKENS.REFRESH_SESSION_USE_CASE,
+  useFactory: (
+    sessionRepo: SessionRepositoryPort,
+    userRepo: UserRepositoryPort,
+    jwt: JwtPort,
+    cookieToken: CookieTokenPort,
+    clock: ClockPort,
+  ): RefreshSessionUseCase =>
+    new RefreshSessionUseCase(
+      sessionRepo,
+      userRepo,
+      jwt,
+      cookieToken,
+      clock,
+    ),
+  inject: [
+    IDENTITY_TOKENS.SESSION_REPOSITORY,
+    IDENTITY_TOKENS.USER_REPOSITORY,
+    IDENTITY_TOKENS.JWT,
+    IDENTITY_TOKENS.COOKIE_TOKEN,
+    IDENTITY_TOKENS.CLOCK,
+  ],
+};
+
+const logoutUseCaseProvider: Provider = {
+  provide: IDENTITY_TOKENS.LOGOUT_USE_CASE,
+  useFactory: (
+    sessionRepo: SessionRepositoryPort,
+    cartReservation: CartReservationPort,
+  ): LogoutUseCase =>
+    new LogoutUseCase(sessionRepo, cartReservation),
+  inject: [
+    IDENTITY_TOKENS.SESSION_REPOSITORY,
+    IDENTITY_TOKENS.CART_RESERVATION,
+  ],
+};
+
 /**
  * Módulo `identity` (MSF-ID-003).
  *
  * Declara el controller HTTP con los endpoints `GET /me`, `PATCH /me`,
+ * `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`,
  * `POST /auth/password-change`, `POST /auth/password-reset-requests` y
  * `POST /auth/password-resets`, y construye los use cases de aplicación
  * sobre los tokens de los ports. Los adapters de salida se cablean aquí
  * para que DI pueda resolver todas las dependencias sin que el dominio
  * ni la aplicación conozcan NestJS o Prisma.
  */
+@Global()
 @Module({
   imports: [PrismaModule, CartReservationModule],
   controllers: [IdentityController],
@@ -287,8 +362,16 @@ const resetPasswordUseCaseProvider: Provider = {
     changePasswordUseCaseProvider,
     requestPasswordResetUseCaseProvider,
     resetPasswordUseCaseProvider,
+    loginUseCaseProvider,
+    refreshSessionUseCaseProvider,
+    logoutUseCaseProvider,
     // Configuración
     refreshCookieTtlProvider,
   ],
+  // DEC-06: el TransportAuthGuard (shared/http) consume `JwtPort` por el
+  // símbolo `IDENTITY_TOKENS.JWT` y se usa en identity, media y catalog.
+  // Exportar el token (con módulo @Global) lo hace resolvable en todos los
+  // módulos sin acoplar media/catalog a toda la DI de identity.
+  exports: [IDENTITY_TOKENS.JWT],
 })
 export class IdentityModule {}

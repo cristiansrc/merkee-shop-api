@@ -7,6 +7,9 @@ import { Argon2PasswordHasherAdapter } from './argon2-password-hasher.adapter';
 import { SystemClockAdapter } from './system-clock.adapter';
 import { PrismaChangePasswordUnitOfWorkAdapter } from './prisma-change-password-unit-of-work.adapter';
 import { PrismaRequestPasswordResetUnitOfWorkAdapter } from './prisma-request-password-reset-unit-of-work.adapter';
+import { LoginUseCase } from '../../application/use-cases/login.use-case';
+import { RefreshSessionUseCase } from '../../application/use-cases/refresh-session.use-case';
+import { LogoutUseCase } from '../../application/use-cases/logout.use-case';
 import { PrometheusCartReaperMetricsAdapter } from '../../../cart-reservation/infrastructure/adapters/prometheus-cart-reaper-metrics.adapter';
 
 describe('IdentityModule wiring (MSF-ID-003)', () => {
@@ -82,5 +85,32 @@ describe('IdentityModule wiring (MSF-ID-003)', () => {
     expect(typeof updateUseCase.execute).toBe('function');
     expect(typeof changeUseCase.execute).toBe('function');
     expect(typeof requestResetUseCase.execute).toBe('function');
+  });
+
+  it('provee LOGIN_USE_CASE como LoginUseCase', async () => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [IdentityModule],
+    }).compile();
+    const useCase = moduleRef.get(IDENTITY_TOKENS.LOGIN_USE_CASE);
+    expect(useCase).toBeInstanceOf(LoginUseCase);
+    expect(typeof useCase.execute).toBe('function');
+  });
+
+  it('provee REFRESH_SESSION_USE_CASE como RefreshSessionUseCase', async () => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [IdentityModule],
+    }).compile();
+    const useCase = moduleRef.get(IDENTITY_TOKENS.REFRESH_SESSION_USE_CASE);
+    expect(useCase).toBeInstanceOf(RefreshSessionUseCase);
+    expect(typeof useCase.execute).toBe('function');
+  });
+
+  it('provee LOGOUT_USE_CASE como LogoutUseCase', async () => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [IdentityModule],
+    }).compile();
+    const useCase = moduleRef.get(IDENTITY_TOKENS.LOGOUT_USE_CASE);
+    expect(useCase).toBeInstanceOf(LogoutUseCase);
+    expect(typeof useCase.execute).toBe('function');
   });
 });

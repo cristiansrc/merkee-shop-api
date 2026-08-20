@@ -5,17 +5,23 @@ import { UpdateProfileUseCase } from './application/use-cases/update-profile.use
 import { ChangePasswordUseCase } from './application/use-cases/change-password.use-case';
 import { RequestPasswordResetUseCase } from './application/use-cases/request-password-reset.use-case';
 import { ResetPasswordUseCase } from './application/use-cases/reset-password.use-case';
+import { LoginUseCase } from './application/use-cases/login.use-case';
+import { RefreshSessionUseCase } from './application/use-cases/refresh-session.use-case';
+import { LogoutUseCase } from './application/use-cases/logout.use-case';
 import { ok, fail } from '../../shared/domain/result';
 import {
   authenticationRequired,
+  invalidCredentials,
   invalidCurrentPassword,
   idempotencyKeyReusedProfileUpdate,
+  sessionNotFoundOrExpired,
 } from './domain/identity-errors';
 import { DomainErrorCode } from '../../shared/domain/domain-error';
 import { HttpException } from '@nestjs/common';
 import {
   validateUpdateProfileRequest,
   validatePasswordChangeRequest,
+  validateLoginRequest,
 } from '../../contract/validation/request-validators';
 
 /** Lee la respuesta `ApiErrorResponse` de una `HttpException`. */
@@ -38,6 +44,9 @@ function buildController(opts: {
   changePassword?: jest.Mock;
   requestPasswordReset?: jest.Mock;
   resetPassword?: jest.Mock;
+  login?: jest.Mock;
+  refreshSession?: jest.Mock;
+  logout?: jest.Mock;
 } = {}): {
   controller: IdentityController;
   getProfile: jest.Mock;
@@ -45,18 +54,27 @@ function buildController(opts: {
   changePassword: jest.Mock;
   requestPasswordReset: jest.Mock;
   resetPassword: jest.Mock;
+  login: jest.Mock;
+  refreshSession: jest.Mock;
+  logout: jest.Mock;
 } {
   const getMyProfileExecute = opts.getProfile ?? jest.fn();
   const updateProfileExecute = opts.updateProfile ?? jest.fn();
   const changePasswordExecute = opts.changePassword ?? jest.fn();
   const requestPasswordResetExecute = opts.requestPasswordReset ?? jest.fn();
   const resetPasswordExecute = opts.resetPassword ?? jest.fn();
+  const loginExecute = opts.login ?? jest.fn();
+  const refreshSessionExecute = opts.refreshSession ?? jest.fn();
+  const logoutExecute = opts.logout ?? jest.fn();
   const controller = new IdentityController(
     { execute: getMyProfileExecute } as unknown as GetMyProfileUseCase,
     { execute: updateProfileExecute } as unknown as UpdateProfileUseCase,
     { execute: changePasswordExecute } as unknown as ChangePasswordUseCase,
     { execute: requestPasswordResetExecute } as unknown as RequestPasswordResetUseCase,
     { execute: resetPasswordExecute } as unknown as ResetPasswordUseCase,
+    { execute: loginExecute } as unknown as LoginUseCase,
+    { execute: refreshSessionExecute } as unknown as RefreshSessionUseCase,
+    { execute: logoutExecute } as unknown as LogoutUseCase,
   );
   return {
     controller,
@@ -65,6 +83,9 @@ function buildController(opts: {
     changePassword: changePasswordExecute,
     requestPasswordReset: requestPasswordResetExecute,
     resetPassword: resetPasswordExecute,
+    login: loginExecute,
+    refreshSession: refreshSessionExecute,
+    logout: logoutExecute,
   };
 }
 
@@ -81,14 +102,48 @@ function actorRequest(
   } as unknown as import('express').Request;
 }
 
-/** Construye un `Response` mínimo que captura `cookie()`. */
+/** Construye un `Response` mínimo que captura `cookie()` y `clearCookie()`. */
 function buildRes(): {
   res: import('express').Response;
   cookie: jest.Mock;
+  clearCookie: jest.Mock;
 } {
   const cookie = jest.fn();
-  const res = { cookie } as unknown as import('express').Response;
-  return { res, cookie };
+  const clearCookie = jest.fn();
+  const res = { cookie, clearCookie } as unknown as import('express').Response;
+  return { res, cookie, clearCookie };
+}
+
+/** Construye un `Request` con `cookies` opcionales. */
+function cookieRequest(
+  url = '/auth/login',
+  cookies: Record<string, string> = {},
+): import('express').Request {
+  return {
+    headers: {},
+    originalUrl: url,
+    url,
+    cookies,
+  } as unknown as import('express').Request;
+}
+
+/** Resultado de sesión de éxito reutilizable para login/refresh. */
+function sessionSuccess() {
+  return ok({
+    session: {
+      access_token: 'jwt-token',
+      expires_at: '2026-08-15T12:10:00.000Z',
+      user: {
+        id: 'user-1',
+        display_name: 'Ada Lovelace',
+        email: 'ada@example.com',
+        role: 'cliente',
+        must_change_password: false,
+        phone: null,
+      },
+    },
+    refreshToken: 'raw-refresh-token',
+  });
 }
 
 describe('IdentityController (MSF-ID-003)', () => {
@@ -743,6 +798,215 @@ describe('IdentityController (MSF-ID-003)', () => {
         { token: 'valid-token', new_password: 'NewStrongP@ssw0rd!123' },
         req,
       );
+    });
+  });
+
+  describe('POST /auth/login', () => {
+    it('devuelve SessionResponse y emite cookie de refresh HttpOnly en éxito', async () => {
+      const { controller, login } = buildController({
+        login: jest.fn().mockResolvedValue(sessionSuccess()),
+      });
+      const { res, cookie } = buildRes();
+      const body = await controller.login(
+        { email: 'ada@example.com', password: 'CorrectP@ssw0rd!' },
+        cookieRequest(),
+        res,
+      );
+
+      expect(login).toHaveBeenCalledWith({
+        email: 'ada@example.com',
+        password: 'CorrectP@ssw0rd!',
+      });
+      expect(body).toMatchObject({ access_token: 'jwt-token' });
+      expect(cookie).toHaveBeenCalledWith(
+        'merkee_refresh_session',
+        'raw-refresh-token',
+        expect.objectContaining({
+          httpOnly: true,
+          sameSite: 'lax',
+          path: '/',
+          expires: new Date('2026-08-15T12:10:00.000Z'),
+        }),
+      );
+    });
+
+    it('propaga guestSessionId desde la cookie de carrito', async () => {
+      const { controller, login } = buildController({
+        login: jest.fn().mockResolvedValue(sessionSuccess()),
+      });
+      const { res } = buildRes();
+      await controller.login(
+        { email: 'ada@example.com', password: 'CorrectP@ssw0rd!' },
+        cookieRequest('/auth/login', { merkee_cart_session: 'guest-session-1' }),
+        res,
+      );
+      expect(login).toHaveBeenCalledWith(
+        expect.objectContaining({ guestSessionId: 'guest-session-1' }),
+      );
+    });
+
+    it('rechaza credenciales inválidas con 401 y NO emite cookie', async () => {
+      const { controller } = buildController({
+        login: jest.fn().mockResolvedValue(fail(invalidCredentials())),
+      });
+      const { res, cookie } = buildRes();
+      await expect(
+        controller.login(
+          { email: 'ada@example.com', password: 'wrong' },
+          cookieRequest(),
+          res,
+        ),
+      ).rejects.toThrow(HttpException);
+      expect(cookie).not.toHaveBeenCalled();
+      try {
+        await controller.login(
+          { email: 'ada@example.com', password: 'wrong' },
+          cookieRequest(),
+          res,
+        );
+      } catch (e) {
+        const r = errorResponseFrom(e);
+        expect(r.code).toBe(DomainErrorCode.INVALID_CREDENTIALS);
+        expect(r.status).toBe(401);
+      }
+    });
+
+    it('valida sintácticamente el body de login (email/password)', () => {
+      expect(validateLoginRequest({ email: 'not-an-email', password: '' }).valid).toBe(false);
+      expect(validateLoginRequest({ email: 'ada@example.com', password: 'x' }).valid).toBe(true);
+    });
+  });
+
+  describe('POST /auth/refresh', () => {
+    it('rota la cookie y devuelve SessionResponse en éxito', async () => {
+      const { controller, refreshSession } = buildController({
+        refreshSession: jest.fn().mockResolvedValue(sessionSuccess()),
+      });
+      const { res, cookie } = buildRes();
+      const body = await controller.refreshSession(
+        cookieRequest('/auth/refresh', { merkee_refresh_session: 'old-token' }),
+        res,
+      );
+
+      expect(refreshSession).toHaveBeenCalledWith({ refreshToken: 'old-token' });
+      expect(body).toMatchObject({ access_token: 'jwt-token' });
+      expect(cookie).toHaveBeenCalledWith(
+        'merkee_refresh_session',
+        'raw-refresh-token',
+        expect.objectContaining({ httpOnly: true }),
+      );
+    });
+
+    it('rechaza 401 cuando falta la cookie de refresh y NO emite cookie', async () => {
+      const { controller, refreshSession } = buildController({
+        refreshSession: jest.fn(),
+      });
+      const { res, cookie } = buildRes();
+      await expect(
+        controller.refreshSession(cookieRequest('/auth/refresh'), res),
+      ).rejects.toThrow(HttpException);
+      expect(refreshSession).not.toHaveBeenCalled();
+      expect(cookie).not.toHaveBeenCalled();
+      try {
+        await controller.refreshSession(cookieRequest('/auth/refresh'), res);
+      } catch (e) {
+        const r = errorResponseFrom(e);
+        expect(r.code).toBe(DomainErrorCode.AUTHENTICATION_REQUIRED);
+        expect(r.status).toBe(401);
+      }
+    });
+
+    it('rechaza 401 cuando el use case devuelve sesión no encontrada/expirada', async () => {
+      const { controller } = buildController({
+        refreshSession: jest.fn().mockResolvedValue(fail(sessionNotFoundOrExpired())),
+      });
+      const { res, cookie } = buildRes();
+      await expect(
+        controller.refreshSession(
+          cookieRequest('/auth/refresh', { merkee_refresh_session: 'stale' }),
+          res,
+        ),
+      ).rejects.toThrow(HttpException);
+      expect(cookie).not.toHaveBeenCalled();
+      try {
+        await controller.refreshSession(
+          cookieRequest('/auth/refresh', { merkee_refresh_session: 'stale' }),
+          res,
+        );
+      } catch (e) {
+        const r = errorResponseFrom(e);
+        expect(r.code).toBe(DomainErrorCode.AUTHENTICATION_REQUIRED);
+        expect(r.status).toBe(401);
+      }
+    });
+  });
+
+  describe('POST /auth/logout', () => {
+    it('invoca el use case con el sessionId del actor y devuelve 204 (void)', async () => {
+      const { controller, logout } = buildController({
+        logout: jest.fn().mockResolvedValue(ok(undefined)),
+      });
+      const { res } = buildRes();
+      await controller.logout(actorRequest('/auth/logout'), res);
+      expect(logout).toHaveBeenCalledWith({ sessionId: 'session-1' });
+    });
+
+    it('usa sessionId vacío cuando el actor no está presente', async () => {
+      const { controller, logout } = buildController({
+        logout: jest.fn().mockResolvedValue(ok(undefined)),
+      });
+      const req = {
+        headers: {},
+        originalUrl: '/auth/logout',
+        url: '/auth/logout',
+      } as unknown as import('express').Request;
+      const { res } = buildRes();
+      await controller.logout(req, res);
+      expect(logout).toHaveBeenCalledWith({ sessionId: '' });
+    });
+
+    it('emite Set-Cookie de limpieza (clearCookie) con Max-Age=0 en éxito', async () => {
+      const { controller } = buildController({
+        logout: jest.fn().mockResolvedValue(ok(undefined)),
+      });
+      const { res, clearCookie } = buildRes();
+      await controller.logout(actorRequest('/auth/logout'), res);
+      expect(clearCookie).toHaveBeenCalledWith(
+        'merkee_refresh_session',
+        expect.objectContaining({
+          path: '/',
+          httpOnly: true,
+          sameSite: 'lax',
+        }),
+      );
+    });
+
+    it('NO emite clearCookie cuando el use case devuelve Failure', async () => {
+      const { controller } = buildController({
+        logout: jest.fn().mockResolvedValue(fail(authenticationRequired())),
+      });
+      const { res, clearCookie } = buildRes();
+      await expect(
+        controller.logout(actorRequest('/auth/logout'), res),
+      ).rejects.toThrow(HttpException);
+      expect(clearCookie).not.toHaveBeenCalled();
+    });
+
+    it('proyecta el Failure del use case a HttpException', async () => {
+      const { controller } = buildController({
+        logout: jest.fn().mockResolvedValue(fail(authenticationRequired())),
+      });
+      const { res } = buildRes();
+      await expect(controller.logout(actorRequest('/auth/logout'), res)).rejects.toThrow(
+        HttpException,
+      );
+      try {
+        await controller.logout(actorRequest('/auth/logout'), res);
+      } catch (e) {
+        const r = errorResponseFrom(e);
+        expect(r.code).toBe(DomainErrorCode.AUTHENTICATION_REQUIRED);
+        expect(r.status).toBe(401);
+      }
     });
   });
 });

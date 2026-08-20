@@ -44,6 +44,32 @@ function httpGet(
   });
 }
 
+/** Helper: GET con headers personalizados (Authorization, tracing, etc.). */
+function httpGetWithHeaders(
+  port: number,
+  path: string,
+  headers: Record<string, string>,
+): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port,
+        path,
+        method: 'GET',
+        headers,
+      },
+      (res) => {
+        let body = '';
+        res.on('data', (chunk) => (body += chunk));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+      },
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 describe('Global route prefix v1 (RCA-FIX)', () => {
   let app: INestApplication;
   let port: number;
@@ -95,6 +121,21 @@ describe('Global route prefix v1 (RCA-FIX)', () => {
     const res = await httpGet(port, '/v1/me');
     // Puede devolver 401 (no auth) pero NO 404
     expect(res.status).not.toBe(404);
+  });
+
+  it('GET /v1/admin/categories sin token → 401 (TransportAuthGuard resuelve JwtPort en CatalogModule)', async () => {
+    // Probar un endpoint autenticado del módulo `catalog` (cross-module):
+    // si la DI del guard no resolviera IDENTITY_TOKENS.JWT aquí, Nest
+    // devolvería 500. Un 401 demuestra que el guard se instancia y verifica.
+    const res = await httpGet(port, '/v1/admin/categories');
+    expect(res.status).toBe(401);
+  });
+
+  it('GET /v1/admin/categories con Bearer forjado → 401 (no 500)', async () => {
+    const res = await httpGetWithHeaders(port, '/v1/admin/categories', {
+      Authorization: 'Bearer not-a-jwt',
+    });
+    expect(res.status).toBe(401);
   });
 
   it('POST /v1/auth/password-change existe', async () => {
