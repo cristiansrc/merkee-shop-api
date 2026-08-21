@@ -48,6 +48,10 @@ export class PrismaSessionRepositoryAdapter implements SessionRepositoryPort {
             data.sessionKind === 'AUTHENTICATED' ? 'AUTHENTICATED' : 'GUEST',
           refreshTokenHash: data.refreshTokenHash,
           expiresAt: data.expiresAt,
+          // `sessions.last_activity_at` es NOT NULL sin default: el adapter
+          // asigna el instante actual (timestamptz vía `Date`), igual que
+          // `rotateRefreshToken`. No recibe ClockPort; usa `new Date()`.
+          lastActivityAt: new Date(),
         } as Prisma.SessionUncheckedCreateInput,
       });
       return ok(this.toDomain(row));

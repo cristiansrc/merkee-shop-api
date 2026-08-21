@@ -1,5 +1,6 @@
 import { PrismaSessionRepositoryAdapter } from './prisma-session-repository.adapter';
 import { PrismaService } from '../prisma.service';
+import { DomainErrorCode } from '../../../../shared/domain/domain-error';
 
 function buildMockPrisma() {
   return {
@@ -42,23 +43,37 @@ describe('PrismaSessionRepositoryAdapter', () => {
   });
 
   describe('create', () => {
-    it('crea una sesión exitosamente', async () => {
+    it('crea una sesión exitosamente incluyendo lastActivityAt', async () => {
+      const expiresAt = new Date('2026-08-20T00:00:00.000Z');
       (prisma.session.create as jest.Mock).mockResolvedValue({
-        id: 's1', userId: 'u1', sessionKind: 'AUTHENTICATED', refreshTokenHash: 'h', expiresAt: new Date(), lastActivityAt: new Date(), revokedAt: null, createdAt: new Date(),
+        id: 's1', userId: 'u1', sessionKind: 'AUTHENTICATED', refreshTokenHash: 'h', expiresAt, lastActivityAt: new Date(), revokedAt: null, createdAt: new Date(),
       });
       const result = await adapter.create({
-        userId: 'u1', sessionKind: 'AUTHENTICATED', refreshTokenHash: 'h', expiresAt: new Date(),
+        userId: 'u1', sessionKind: 'AUTHENTICATED', refreshTokenHash: 'h', expiresAt,
       });
       expect(result.ok).toBe(true);
       if (result.ok) expect(result.value.id).toBe('s1');
+
+      // `sessions.last_activity_at` es NOT NULL sin default: el adapter debe
+      // persistirla en la creación.
+      const createArg = (prisma.session.create as jest.Mock).mock.calls[0][0];
+      expect(createArg.data.lastActivityAt).toBeInstanceOf(Date);
+      expect(createArg.data.expiresAt).toBe(expiresAt);
     });
 
-    it('retorna error técnico cuando create falla', async () => {
+    it('retorna error técnico sin PII cuando create falla', async () => {
       (prisma.session.create as jest.Mock).mockRejectedValue(new Error('DB fail'));
       const result = await adapter.create({
-        userId: 'u1', sessionKind: 'AUTHENTICATED', refreshTokenHash: 'h', expiresAt: new Date(),
+        userId: 'user-12345', sessionKind: 'AUTHENTICATED', refreshTokenHash: 'super-secret-hash', expiresAt: new Date(),
       });
       expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(DomainErrorCode.TECHNICAL_DEPENDENCY_FAILURE);
+        // Sin PII: el error no filtra userId ni refreshTokenHash.
+        const serialized = JSON.stringify(result.error);
+        expect(serialized).not.toContain('user-12345');
+        expect(serialized).not.toContain('super-secret-hash');
+      }
     });
 
     it('crea sesión GUEST cuando sessionKind es GUEST', async () => {
