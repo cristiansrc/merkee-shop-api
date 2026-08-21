@@ -9,6 +9,7 @@ import {
   sessionNotFoundOrExpired,
   technicalFailure,
 } from '../../domain/identity-errors';
+import { SESSION_INACTIVITY_TTL_MS } from '../../domain/session.config';
 import type { SessionDto } from '../../../../contract/application/dto';
 
 /** Comando de entrada del caso de uso de refresh. */
@@ -22,9 +23,6 @@ export interface RefreshSessionResult {
   readonly session: SessionDto;
   readonly refreshToken: string;
 }
-
-/** Duración de sesión en ms (10 minutos). */
-const SESSION_DURATION_MS = 10 * 60 * 1000;
 
 /**
  * Caso de uso de refresh de sesión (MSF-ID-001).
@@ -79,7 +77,7 @@ export class RefreshSessionUseCase {
       // 5. Rotar refresh token
       const newRefreshToken = this.cookieToken.generate();
       const newRefreshTokenHash = this.cookieToken.hash(newRefreshToken);
-      const newExpiresAt = new Date(now.getTime() + SESSION_DURATION_MS);
+      const newExpiresAt = new Date(now.getTime() + SESSION_INACTIVITY_TTL_MS);
 
       const rotateResult = await this.sessionRepo.rotateRefreshToken(
         session.id,

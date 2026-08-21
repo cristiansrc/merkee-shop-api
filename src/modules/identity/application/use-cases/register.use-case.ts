@@ -7,6 +7,7 @@ import { JwtPort } from '../../domain/ports/jwt.port';
 import { CookieTokenPort } from '../../domain/ports/cookie-token.port';
 import { ClockPort } from '../../domain/ports/clock.port';
 import { emailAlreadyRegistered, technicalFailure } from '../../domain/identity-errors';
+import { SESSION_INACTIVITY_TTL_MS } from '../../domain/session.config';
 import type { SessionDto } from '../../../../contract/application/dto';
 
 /** Comando de entrada del caso de uso de registro. */
@@ -22,9 +23,6 @@ export interface RegisterResult {
   readonly session: SessionDto;
   readonly refreshToken: string;
 }
-
-/** Duración de sesión en ms (10 minutos). */
-const SESSION_DURATION_MS = 10 * 60 * 1000;
 
 /**
  * Caso de uso de registro público de cliente (MSF-ID-001).
@@ -77,7 +75,7 @@ export class RegisterUseCase {
     const refreshToken = this.cookieToken.generate();
     const refreshTokenHash = this.cookieToken.hash(refreshToken);
     const now = this.clock.now();
-    const expiresAt = new Date(now.getTime() + SESSION_DURATION_MS);
+    const expiresAt = new Date(now.getTime() + SESSION_INACTIVITY_TTL_MS);
 
     const sessionResult = await this.sessionRepo.create({
       userId: createResult.value.id,

@@ -161,7 +161,7 @@ export class IdentityController {
   /**
    * Emite la cookie de refresh opaca HttpOnly alineada con OpenAPI
    * (`Set-Cookie` en login/refresh/password-change): HttpOnly, Secure en
-   * producción, SameSite=Lax, path raíz y expiración de la sesión (10 min).
+   * producción, SameSite=Lax, path raíz y expiración de la sesión (30 min).
    */
   private setRefreshCookie(res: Response, token: string, expiresAt: Date): void {
     res.cookie(REFRESH_COOKIE_NAME, token, {

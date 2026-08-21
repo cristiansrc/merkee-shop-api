@@ -65,12 +65,12 @@ describe('IdentityModule wiring (MSF-ID-003)', () => {
     expect(uow).toBeInstanceOf(PrismaRequestPasswordResetUnitOfWorkAdapter);
   });
 
-  it('provee REFRESH_COOKIE_TTL_MS alineado con sesiones (10 minutos)', async () => {
+  it('provee REFRESH_COOKIE_TTL_MS alineado con sesiones (30 minutos)', async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [IdentityModule],
     }).compile();
     const ttl = moduleRef.get<number>(IDENTITY_TOKENS.REFRESH_COOKIE_TTL_MS);
-    expect(ttl).toBe(10 * 60 * 1000);
+    expect(ttl).toBe(30 * 60 * 1000);
   });
 
   it('construye los casos de uso sin importar NestJS/Prisma', async () => {

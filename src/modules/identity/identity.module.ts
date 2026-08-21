@@ -40,9 +40,10 @@ import { EmailPort } from './domain/ports/email.port';
 import { ResetPasswordUnitOfWorkPort } from './domain/ports/reset-password-unit-of-work.port';
 import { RequestPasswordResetUnitOfWorkPort } from './domain/ports/request-password-reset-unit-of-work.port';
 import { CartReservationPort } from './domain/ports/cart-reservation.port';
+import { SESSION_INACTIVITY_TTL_MS } from './domain/session.config';
 
-/** TTL del cookie rotado de refresh alineado con sesiones (10 minutos). */
-const DEFAULT_REFRESH_COOKIE_TTL_MS = 10 * 60 * 1000;
+/** TTL del cookie rotado de refresh alineado con sesiones (30 minutos de inactividad). */
+const DEFAULT_REFRESH_COOKIE_TTL_MS = SESSION_INACTIVITY_TTL_MS;
 
 // ---------------------------------------------------------------------------
 // Providers de adapters de salida (puertos → Prisma)

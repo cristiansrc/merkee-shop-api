@@ -10,6 +10,7 @@ import { Session } from '../../domain/models/session';
 import { isSuccess, ok, fail, isFailure } from '../../../../shared/domain/result';
 import { DomainErrorCode } from '../../../../shared/domain/domain-error';
 import { technicalFailure } from '../../domain/identity-errors';
+import { SESSION_INACTIVITY_TTL_MS } from '../../domain/session.config';
 
 // ---------------------------------------------------------------------------
 // Stubs
@@ -162,7 +163,7 @@ describe('RegisterUseCase', () => {
     if (isSuccess(result)) {
       expect(result.value.session.access_token).toBe('jwt-token');
       expect(result.value.session.expires_at).toBe(
-        new Date(fixedDate.getTime() + 10 * 60 * 1000).toISOString(),
+        new Date(fixedDate.getTime() + SESSION_INACTIVITY_TTL_MS).toISOString(),
       );
       expect(result.value.session.user.role).toBe('cliente');
       expect(result.value.session.user.email).toBe('cliente@example.com');

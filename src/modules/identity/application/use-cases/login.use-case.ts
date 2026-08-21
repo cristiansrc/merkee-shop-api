@@ -11,6 +11,7 @@ import {
   invalidCredentials,
   technicalFailure,
 } from '../../domain/identity-errors';
+import { SESSION_INACTIVITY_TTL_MS } from '../../domain/session.config';
 import type { SessionDto } from '../../../../contract/application/dto';
 
 /** Comando de entrada del caso de uso de login. */
@@ -26,9 +27,6 @@ export interface LoginResult {
   readonly session: SessionDto;
   readonly refreshToken: string;
 }
-
-/** Duración de sesión en ms (10 minutos). */
-const SESSION_DURATION_MS = 10 * 60 * 1000;
 
 /**
  * Caso de uso de login con email/password (MSF-ID-001).
@@ -104,7 +102,7 @@ export class LoginUseCase {
     const refreshToken = this.cookieToken.generate();
     const refreshTokenHash = this.cookieToken.hash(refreshToken);
     const now = this.clock.now();
-    const expiresAt = new Date(now.getTime() + SESSION_DURATION_MS);
+    const expiresAt = new Date(now.getTime() + SESSION_INACTIVITY_TTL_MS);
 
     const sessionResult = await this.sessionRepo.create({
       userId: user.id,
