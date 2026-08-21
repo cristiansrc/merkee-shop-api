@@ -25,6 +25,7 @@ import {
   validatePasswordResetRequest,
   validatePasswordResetConfirmRequest,
   validateLoginRequest,
+  validateRegisterRequest,
 } from '../../contract/validation/request-validators';
 import { validateIdempotencyKey } from '../../contract/validation/header-validators';
 import { SessionResponse } from '../../contract/schemas';
@@ -35,6 +36,7 @@ import { ChangePasswordUseCase } from './application/use-cases/change-password.u
 import { RequestPasswordResetUseCase } from './application/use-cases/request-password-reset.use-case';
 import { ResetPasswordUseCase } from './application/use-cases/reset-password.use-case';
 import { LoginUseCase } from './application/use-cases/login.use-case';
+import { RegisterUseCase } from './application/use-cases/register.use-case';
 import { RefreshSessionUseCase } from './application/use-cases/refresh-session.use-case';
 import { LogoutUseCase } from './application/use-cases/logout.use-case';
 import { authenticationRequired } from './domain/identity-errors';
@@ -70,6 +72,13 @@ interface ValidatedPasswordResetConfirmBody {
 
 /** Tipo del body validado para `POST /auth/login`. */
 interface ValidatedLoginBody {
+  readonly email: string;
+  readonly password: string;
+}
+
+/** Tipo del body validado para `POST /auth/register`. */
+interface ValidatedRegisterBody {
+  readonly display_name: string;
   readonly email: string;
   readonly password: string;
 }
@@ -126,6 +135,7 @@ function requireIdempotencyKey(
  * Endpoints:
  *  - `GET  /me`                  → `getMyProfile`
  *  - `PATCH /me`                 → `updateMyProfile`
+ *  - `POST /auth/register`       → `register`
  *  - `POST /auth/login`          → `login`
  *  - `POST /auth/refresh`        → `refreshSession`
  *  - `POST /auth/logout`         → `logout`
@@ -152,6 +162,8 @@ export class IdentityController {
     private readonly resetPasswordUseCase: ResetPasswordUseCase,
     @Inject(IDENTITY_TOKENS.LOGIN_USE_CASE)
     private readonly loginUseCase: LoginUseCase,
+    @Inject(IDENTITY_TOKENS.REGISTER_USE_CASE)
+    private readonly registerUseCase: RegisterUseCase,
     @Inject(IDENTITY_TOKENS.REFRESH_SESSION_USE_CASE)
     private readonly refreshSessionUseCase: RefreshSessionUseCase,
     @Inject(IDENTITY_TOKENS.LOGOUT_USE_CASE)
@@ -192,6 +204,31 @@ export class IdentityController {
       return projectResult(result, path, traceId);
     }
     return (result as { ok: true; value: GetMyProfileResult }).value.user;
+  }
+
+  /** `POST /auth/register` — registra un cliente e inicia una sesión. */
+  @Post('auth/register')
+  @HttpCode(HttpStatus.CREATED)
+  async register(
+    @Body(new TransportValidationPipe(validateRegisterRequest))
+    body: ValidatedRegisterBody,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<SessionResponse> {
+    const path = req.originalUrl ?? req.url ?? '/auth/register';
+    const traceId =
+      typeof req.headers['x-request-id'] === 'string'
+        ? (req.headers['x-request-id'] as string)
+        : 'register';
+
+    const result = await this.registerUseCase.execute({
+      email: body.email,
+      password: body.password,
+      displayName: body.display_name,
+    });
+    const value = projectResult(result, path, traceId);
+    this.setRefreshCookie(res, value.refreshToken, new Date(value.session.expires_at));
+    return value.session;
   }
 
   /** `POST /auth/login` — autentica con email/password y devuelve sesión. */

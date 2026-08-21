@@ -8,6 +8,7 @@ import { SystemClockAdapter } from './system-clock.adapter';
 import { PrismaChangePasswordUnitOfWorkAdapter } from './prisma-change-password-unit-of-work.adapter';
 import { PrismaRequestPasswordResetUnitOfWorkAdapter } from './prisma-request-password-reset-unit-of-work.adapter';
 import { LoginUseCase } from '../../application/use-cases/login.use-case';
+import { RegisterUseCase } from '../../application/use-cases/register.use-case';
 import { RefreshSessionUseCase } from '../../application/use-cases/refresh-session.use-case';
 import { LogoutUseCase } from '../../application/use-cases/logout.use-case';
 import { PrometheusCartReaperMetricsAdapter } from '../../../cart-reservation/infrastructure/adapters/prometheus-cart-reaper-metrics.adapter';
@@ -93,6 +94,15 @@ describe('IdentityModule wiring (MSF-ID-003)', () => {
     }).compile();
     const useCase = moduleRef.get(IDENTITY_TOKENS.LOGIN_USE_CASE);
     expect(useCase).toBeInstanceOf(LoginUseCase);
+    expect(typeof useCase.execute).toBe('function');
+  });
+
+  it('provee REGISTER_USE_CASE como RegisterUseCase', async () => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [IdentityModule],
+    }).compile();
+    const useCase = moduleRef.get(IDENTITY_TOKENS.REGISTER_USE_CASE);
+    expect(useCase).toBeInstanceOf(RegisterUseCase);
     expect(typeof useCase.execute).toBe('function');
   });
 

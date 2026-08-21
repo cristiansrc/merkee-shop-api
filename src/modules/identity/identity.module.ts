@@ -12,6 +12,7 @@ import { ResetPasswordUseCase } from './application/use-cases/reset-password.use
 import { LoginUseCase } from './application/use-cases/login.use-case';
 import { RefreshSessionUseCase } from './application/use-cases/refresh-session.use-case';
 import { LogoutUseCase } from './application/use-cases/logout.use-case';
+import { RegisterUseCase } from './application/use-cases/register.use-case';
 import { IdentityController } from './identity.controller';
 import { PrismaUserRepositoryAdapter } from './infrastructure/adapters/prisma-user-repository.adapter';
 import { PrismaSessionRepositoryAdapter } from './infrastructure/adapters/prisma-session-repository.adapter';
@@ -288,6 +289,34 @@ const loginUseCaseProvider: Provider = {
   ],
 };
 
+const registerUseCaseProvider: Provider = {
+  provide: IDENTITY_TOKENS.REGISTER_USE_CASE,
+  useFactory: (
+    userRepo: UserRepositoryPort,
+    sessionRepo: SessionRepositoryPort,
+    passwordHasher: PasswordHasherPort,
+    jwt: JwtPort,
+    cookieToken: CookieTokenPort,
+    clock: ClockPort,
+  ): RegisterUseCase =>
+    new RegisterUseCase(
+      userRepo,
+      sessionRepo,
+      passwordHasher,
+      jwt,
+      cookieToken,
+      clock,
+    ),
+  inject: [
+    IDENTITY_TOKENS.USER_REPOSITORY,
+    IDENTITY_TOKENS.SESSION_REPOSITORY,
+    IDENTITY_TOKENS.PASSWORD_HASHER,
+    IDENTITY_TOKENS.JWT,
+    IDENTITY_TOKENS.COOKIE_TOKEN,
+    IDENTITY_TOKENS.CLOCK,
+  ],
+};
+
 const refreshSessionUseCaseProvider: Provider = {
   provide: IDENTITY_TOKENS.REFRESH_SESSION_USE_CASE,
   useFactory: (
@@ -330,12 +359,12 @@ const logoutUseCaseProvider: Provider = {
  * Módulo `identity` (MSF-ID-003).
  *
  * Declara el controller HTTP con los endpoints `GET /me`, `PATCH /me`,
- * `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`,
- * `POST /auth/password-change`, `POST /auth/password-reset-requests` y
- * `POST /auth/password-resets`, y construye los use cases de aplicación
- * sobre los tokens de los ports. Los adapters de salida se cablean aquí
- * para que DI pueda resolver todas las dependencias sin que el dominio
- * ni la aplicación conozcan NestJS o Prisma.
+ * `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`,
+ * `POST /auth/logout`, `POST /auth/password-change`,
+ * `POST /auth/password-reset-requests` y `POST /auth/password-resets`, y
+ * construye los use cases de aplicación sobre los tokens de los ports. Los
+ * adapters de salida se cablean aquí para que DI pueda resolver todas las
+ * dependencias sin que el dominio ni la aplicación conozcan NestJS o Prisma.
  */
 @Global()
 @Module({
@@ -364,6 +393,7 @@ const logoutUseCaseProvider: Provider = {
     requestPasswordResetUseCaseProvider,
     resetPasswordUseCaseProvider,
     loginUseCaseProvider,
+    registerUseCaseProvider,
     refreshSessionUseCaseProvider,
     logoutUseCaseProvider,
     // Configuración

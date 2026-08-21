@@ -6,6 +6,7 @@ import { ChangePasswordUseCase } from './application/use-cases/change-password.u
 import { RequestPasswordResetUseCase } from './application/use-cases/request-password-reset.use-case';
 import { ResetPasswordUseCase } from './application/use-cases/reset-password.use-case';
 import { LoginUseCase } from './application/use-cases/login.use-case';
+import { RegisterUseCase } from './application/use-cases/register.use-case';
 import { RefreshSessionUseCase } from './application/use-cases/refresh-session.use-case';
 import { LogoutUseCase } from './application/use-cases/logout.use-case';
 import { ok, fail } from '../../shared/domain/result';
@@ -15,6 +16,7 @@ import {
   invalidCurrentPassword,
   idempotencyKeyReusedProfileUpdate,
   sessionNotFoundOrExpired,
+  emailAlreadyRegistered,
 } from './domain/identity-errors';
 import { DomainErrorCode } from '../../shared/domain/domain-error';
 import { HttpException } from '@nestjs/common';
@@ -22,6 +24,7 @@ import {
   validateUpdateProfileRequest,
   validatePasswordChangeRequest,
   validateLoginRequest,
+  validateRegisterRequest,
 } from '../../contract/validation/request-validators';
 
 /** Lee la respuesta `ApiErrorResponse` de una `HttpException`. */
@@ -45,6 +48,7 @@ function buildController(opts: {
   requestPasswordReset?: jest.Mock;
   resetPassword?: jest.Mock;
   login?: jest.Mock;
+  register?: jest.Mock;
   refreshSession?: jest.Mock;
   logout?: jest.Mock;
 } = {}): {
@@ -55,6 +59,7 @@ function buildController(opts: {
   requestPasswordReset: jest.Mock;
   resetPassword: jest.Mock;
   login: jest.Mock;
+  register: jest.Mock;
   refreshSession: jest.Mock;
   logout: jest.Mock;
 } {
@@ -64,6 +69,7 @@ function buildController(opts: {
   const requestPasswordResetExecute = opts.requestPasswordReset ?? jest.fn();
   const resetPasswordExecute = opts.resetPassword ?? jest.fn();
   const loginExecute = opts.login ?? jest.fn();
+  const registerExecute = opts.register ?? jest.fn();
   const refreshSessionExecute = opts.refreshSession ?? jest.fn();
   const logoutExecute = opts.logout ?? jest.fn();
   const controller = new IdentityController(
@@ -73,6 +79,7 @@ function buildController(opts: {
     { execute: requestPasswordResetExecute } as unknown as RequestPasswordResetUseCase,
     { execute: resetPasswordExecute } as unknown as ResetPasswordUseCase,
     { execute: loginExecute } as unknown as LoginUseCase,
+    { execute: registerExecute } as unknown as RegisterUseCase,
     { execute: refreshSessionExecute } as unknown as RefreshSessionUseCase,
     { execute: logoutExecute } as unknown as LogoutUseCase,
   );
@@ -84,6 +91,7 @@ function buildController(opts: {
     requestPasswordReset: requestPasswordResetExecute,
     resetPassword: resetPasswordExecute,
     login: loginExecute,
+    register: registerExecute,
     refreshSession: refreshSessionExecute,
     logout: logoutExecute,
   };
@@ -798,6 +806,94 @@ describe('IdentityController (MSF-ID-003)', () => {
         { token: 'valid-token', new_password: 'NewStrongP@ssw0rd!123' },
         req,
       );
+    });
+  });
+
+  describe('POST /auth/register', () => {
+    it('devuelve SessionResponse y emite cookie de refresh HttpOnly en éxito', async () => {
+      const { controller, register } = buildController({
+        register: jest.fn().mockResolvedValue(sessionSuccess()),
+      });
+      const { res, cookie } = buildRes();
+      const body = await controller.register(
+        { display_name: 'Ada Lovelace', email: 'ada@example.com', password: 'CorrectP@ssw0rd!' },
+        cookieRequest('/auth/register'),
+        res,
+      );
+
+      expect(register).toHaveBeenCalledWith({
+        email: 'ada@example.com',
+        password: 'CorrectP@ssw0rd!',
+        displayName: 'Ada Lovelace',
+      });
+      expect(body).toMatchObject({ access_token: 'jwt-token' });
+      expect(cookie).toHaveBeenCalledWith(
+        'merkee_refresh_session',
+        'raw-refresh-token',
+        expect.objectContaining({
+          httpOnly: true,
+          sameSite: 'lax',
+          path: '/',
+          expires: new Date('2026-08-15T12:10:00.000Z'),
+        }),
+      );
+    });
+
+    it('rechaza con 409 cuando el email ya está registrado y NO emite cookie', async () => {
+      const { controller } = buildController({
+        register: jest.fn().mockResolvedValue(fail(emailAlreadyRegistered())),
+      });
+      const { res, cookie } = buildRes();
+      await expect(
+        controller.register(
+          { display_name: 'Ada Lovelace', email: 'ada@example.com', password: 'CorrectP@ssw0rd!' },
+          cookieRequest('/auth/register'),
+          res,
+        ),
+      ).rejects.toThrow(HttpException);
+      expect(cookie).not.toHaveBeenCalled();
+      try {
+        await controller.register(
+          { display_name: 'Ada Lovelace', email: 'ada@example.com', password: 'CorrectP@ssw0rd!' },
+          cookieRequest('/auth/register'),
+          res,
+        );
+      } catch (e) {
+        const r = errorResponseFrom(e);
+        expect(r.code).toBe(DomainErrorCode.EMAIL_ALREADY_REGISTERED);
+        expect(r.status).toBe(409);
+      }
+    });
+
+    it('valida sintácticamente el body de register (display_name/email/password)', () => {
+      expect(
+        validateRegisterRequest({
+          display_name: 'A',
+          email: 'ada@example.com',
+          password: 'CorrectP@ssw0rd!',
+        }).valid,
+      ).toBe(false);
+      expect(
+        validateRegisterRequest({
+          display_name: 'Ada Lovelace',
+          email: 'not-an-email',
+          password: 'CorrectP@ssw0rd!',
+        }).valid,
+      ).toBe(false);
+      expect(
+        validateRegisterRequest({
+          display_name: 'Ada Lovelace',
+          email: 'ada@example.com',
+          password: 'short',
+        }).valid,
+      ).toBe(false);
+      expect(
+        validateRegisterRequest({
+          display_name: 'Ada Lovelace',
+          email: 'ada@example.com',
+          password: 'CorrectP@ssw0rd!',
+        }).valid,
+      ).toBe(true);
     });
   });
 
