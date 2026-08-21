@@ -118,6 +118,39 @@ const sampleProducts = new Map([
   ],
 ]);
 
+const sampleMultiItemProducts = new Map([
+  [
+    'prod-1',
+    {
+      id: 'prod-1',
+      category: { id: 'cat-1', name: 'Frutas', imageKey: 'cat-img-1' },
+      name: 'Manzana',
+      description: 'Manzana roja',
+      regularPriceCop: 10000n,
+      salePriceCop: 8000n,
+      unit: 'kg',
+      stockOnHand: 100,
+      stockReserved: 5,
+      images: [{ key: 'img-1', altText: 'manzana', position: 1 }],
+    },
+  ],
+  [
+    'prod-2',
+    {
+      id: 'prod-2',
+      category: { id: 'cat-2', name: 'Verduras', imageKey: 'cat-img-2' },
+      name: 'Lechuga',
+      description: 'Lechuga fresca',
+      regularPriceCop: 3000n,
+      salePriceCop: 0n,
+      unit: 'kg',
+      stockOnHand: 50,
+      stockReserved: 10,
+      images: [{ key: 'img-2', altText: 'lechuga', position: 1 }],
+    },
+  ],
+]);
+
 describe('CartReservationController', () => {
   // ===========================================================================
   // Resolución de sesión
@@ -307,6 +340,70 @@ describe('CartReservationController', () => {
       expect(result.id).toBe('cart-1');
       expect(result.items).toHaveLength(1);
     });
+
+    it('retorna URLs de imágenes resueltas via CloudFront', async () => {
+      const mocks = buildMocks({
+        getCart: jest.fn().mockResolvedValue(
+          ok({ cartWithItems: sampleCartWithItems, products: sampleProducts }),
+        ),
+      });
+      const controller = buildController(mocks);
+      const req = cartRequest('session-123');
+      const result = await controller.getCart(req, {} as any);
+      expect(result.items[0].product.images[0].url).toContain('https://images.merkee.shop/');
+      expect(result.items[0].product.category.image.url).toContain('https://images.merkee.shop/');
+    });
+
+    it('retorna nombres y precios correctos para todos los items', async () => {
+      const multiItemCart = {
+        cart: {
+          id: 'cart-1',
+          sessionId: 'session-123',
+          status: 'ACTIVE',
+          itemsSubtotalCop: 23000n,
+          deliveryFeeCop: 5000n,
+          ivaCop: 4370n,
+          taxRateBasisPoints: 1900,
+          totalCop: 32370n,
+          reservationExpiresAt: new Date('2030-01-01T00:00:00Z'),
+        },
+        items: [
+          {
+            id: 'item-1',
+            cartId: 'cart-1',
+            productId: 'prod-1',
+            quantity: 2,
+            unitPriceCop: 8000n,
+            subtotalCop: 16000n,
+            reservation: { id: 'res-1', cartItemId: 'item-1', productId: 'prod-1', quantity: 2, status: 'ACTIVE' as const, expiresAt: new Date('2030-01-01T00:00:00Z') },
+          },
+          {
+            id: 'item-2',
+            cartId: 'cart-1',
+            productId: 'prod-2',
+            quantity: 1,
+            unitPriceCop: 3000n,
+            subtotalCop: 3000n,
+            reservation: { id: 'res-2', cartItemId: 'item-2', productId: 'prod-2', quantity: 1, status: 'ACTIVE' as const, expiresAt: new Date('2030-01-01T00:00:00Z') },
+          },
+        ],
+      };
+      const mocks = buildMocks({
+        getCart: jest.fn().mockResolvedValue(
+          ok({ cartWithItems: multiItemCart, products: sampleMultiItemProducts }),
+        ),
+      });
+      const controller = buildController(mocks);
+      const req = cartRequest('session-123');
+      const result = await controller.getCart(req, {} as any);
+      expect(result.items).toHaveLength(2);
+      expect(result.items[0].product.name).toBe('Manzana');
+      expect(result.items[0].product.sale_price_cop).toBe(8000);
+      expect(result.items[1].product.name).toBe('Lechuga');
+      expect(result.items[1].product.regular_price_cop).toBe(3000);
+      expect(result.items[0].product.images[0].url).toContain('https://images.merkee.shop/img-1');
+      expect(result.items[1].product.images[0].url).toContain('https://images.merkee.shop/img-2');
+    });
   });
 
   // ===========================================================================
@@ -329,6 +426,62 @@ describe('CartReservationController', () => {
       );
       expect(result).toBeDefined();
       expect(mocks.addCartItem).toHaveBeenCalled();
+    });
+
+    it('retorna todos los productos con nombres, precios y URLs al agregar item', async () => {
+      const multiItemCart = {
+        cart: {
+          id: 'cart-1',
+          sessionId: 'session-123',
+          status: 'ACTIVE',
+          itemsSubtotalCop: 19000n,
+          deliveryFeeCop: 5000n,
+          ivaCop: 3610n,
+          taxRateBasisPoints: 1900,
+          totalCop: 27610n,
+          reservationExpiresAt: new Date('2030-01-01T00:00:00Z'),
+        },
+        items: [
+          {
+            id: 'item-1',
+            cartId: 'cart-1',
+            productId: 'prod-1',
+            quantity: 2,
+            unitPriceCop: 8000n,
+            subtotalCop: 16000n,
+            reservation: { id: 'res-1', cartItemId: 'item-1', productId: 'prod-1', quantity: 2, status: 'ACTIVE' as const, expiresAt: new Date('2030-01-01T00:00:00Z') },
+          },
+          {
+            id: 'item-2',
+            cartId: 'cart-1',
+            productId: 'prod-2',
+            quantity: 1,
+            unitPriceCop: 3000n,
+            subtotalCop: 3000n,
+            reservation: { id: 'res-2', cartItemId: 'item-2', productId: 'prod-2', quantity: 1, status: 'ACTIVE' as const, expiresAt: new Date('2030-01-01T00:00:00Z') },
+          },
+        ],
+      };
+      const mocks = buildMocks({
+        addCartItem: jest.fn().mockResolvedValue(
+          ok({ cartWithItems: multiItemCart, products: sampleMultiItemProducts }),
+        ),
+      });
+      const controller = buildController(mocks);
+      const req = cartRequest('session-123');
+      const result = await controller.addCartItem(
+        { product_id: 'prod-1', quantity: 2 },
+        '11111111-1111-4111-8111-111111111111',
+        req,
+        {} as any,
+      );
+      expect(result.items).toHaveLength(2);
+      expect(result.items[0].product.name).toBe('Manzana');
+      expect(result.items[0].product.sale_price_cop).toBe(8000);
+      expect(result.items[1].product.name).toBe('Lechuga');
+      expect(result.items[1].product.regular_price_cop).toBe(3000);
+      expect(result.items[0].product.images[0].url).toContain('https://images.merkee.shop/');
+      expect(result.items[1].product.images[0].url).toContain('https://images.merkee.shop/');
     });
 
     it('lanza 400 cuando falta Idempotency-Key', async () => {
@@ -373,6 +526,63 @@ describe('CartReservationController', () => {
         {} as any,
       );
       expect(result).toBeDefined();
+    });
+
+    it('retorna todos los productos con nombres, precios y URLs al actualizar cantidad', async () => {
+      const multiItemCart = {
+        cart: {
+          id: 'cart-1',
+          sessionId: 'session-123',
+          status: 'ACTIVE',
+          itemsSubtotalCop: 19000n,
+          deliveryFeeCop: 5000n,
+          ivaCop: 3610n,
+          taxRateBasisPoints: 1900,
+          totalCop: 27610n,
+          reservationExpiresAt: new Date('2030-01-01T00:00:00Z'),
+        },
+        items: [
+          {
+            id: 'item-1',
+            cartId: 'cart-1',
+            productId: 'prod-1',
+            quantity: 2,
+            unitPriceCop: 8000n,
+            subtotalCop: 16000n,
+            reservation: { id: 'res-1', cartItemId: 'item-1', productId: 'prod-1', quantity: 2, status: 'ACTIVE' as const, expiresAt: new Date('2030-01-01T00:00:00Z') },
+          },
+          {
+            id: 'item-2',
+            cartId: 'cart-1',
+            productId: 'prod-2',
+            quantity: 1,
+            unitPriceCop: 3000n,
+            subtotalCop: 3000n,
+            reservation: { id: 'res-2', cartItemId: 'item-2', productId: 'prod-2', quantity: 1, status: 'ACTIVE' as const, expiresAt: new Date('2030-01-01T00:00:00Z') },
+          },
+        ],
+      };
+      const mocks = buildMocks({
+        setCartItemQuantity: jest.fn().mockResolvedValue(
+          ok({ cartWithItems: multiItemCart, products: sampleMultiItemProducts }),
+        ),
+      });
+      const controller = buildController(mocks);
+      const req = cartRequest('session-123');
+      const result = await controller.setCartItemQuantity(
+        'prod-1',
+        { quantity: 3 },
+        '22222222-2222-4222-8222-222222222222',
+        req,
+        {} as any,
+      );
+      expect(result.items).toHaveLength(2);
+      expect(result.items[0].product.name).toBe('Manzana');
+      expect(result.items[0].product.sale_price_cop).toBe(8000);
+      expect(result.items[1].product.name).toBe('Lechuga');
+      expect(result.items[1].product.regular_price_cop).toBe(3000);
+      expect(result.items[0].product.images[0].url).toContain('https://images.merkee.shop/');
+      expect(result.items[1].product.images[0].url).toContain('https://images.merkee.shop/');
     });
 
     it('lanza 400 cuando falta Idempotency-Key en PUT', async () => {

@@ -252,7 +252,9 @@ describe('GetCartUseCase', () => {
     }
   });
 
-  it('devuelve 410 cuando la sesión es válida pero no existe carrito', async () => {
+  it('devuelve Success con carrito vacío ACTIVE cuando sesión válida sin carrito (AC-02)', async () => {
+    const now = new Date('2026-08-17T12:00:00Z');
+    mockClock.now.mockReturnValue(now);
     mockSessionLookup.findById.mockResolvedValue({
       id: 'session-123',
       userId: null,
@@ -265,11 +267,15 @@ describe('GetCartUseCase', () => {
 
     const result = await useCase.execute('session-123');
 
-    expect(isFailure(result)).toBe(true);
-    if (isFailure(result)) {
-      expect(result.error.code).toBe('SESSION_EXPIRED');
+    expect(isSuccess(result)).toBe(true);
+    if (isSuccess(result)) {
+      expect(result.value.cartWithItems.cart.status).toBe('ACTIVE');
+      expect(result.value.cartWithItems.cart.itemsSubtotalCop).toBe(0n);
+      expect(result.value.cartWithItems.cart.totalCop).toBe(5000n);
+      expect(result.value.cartWithItems.items).toHaveLength(0);
+      expect(result.value.products.size).toBe(0);
     }
-    expect(mockCartRepo.touchSession).not.toHaveBeenCalled();
+    expect(mockCartRepo.touchSession).toHaveBeenCalledWith('session-123', now);
   });
 
   it('devuelve Success con carrito vacío y renueva sesión', async () => {

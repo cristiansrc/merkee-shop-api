@@ -19,6 +19,7 @@ import { Result } from '../../shared/domain/result';
 import { DomainError } from '../../shared/domain/domain-error';
 import { TransportValidationPipe } from '../../shared/http/transport-validation.pipe';
 import { projectResult } from '../../shared/http/result-projector';
+import { resolveMediaPublicUrl } from '../../shared/http/media-url';
 import {
   validateCartItemMutationRequest,
   validateSetCartItemQuantityRequest,
@@ -324,7 +325,7 @@ export class CartReservationController {
               category: {
                 id: product.category.id,
                 name: product.category.name,
-                image: { key: product.category.imageKey, url: '', alt_text: product.category.name, position: 0 },
+                image: { key: product.category.imageKey, url: resolveMediaPublicUrl(product.category.imageKey), alt_text: product.category.name, position: 0 },
                 version: 1,
               },
               name: product.name,
@@ -335,7 +336,7 @@ export class CartReservationController {
               stock_available: product.stockOnHand - product.stockReserved,
               images: product.images.map((img: any) => ({
                 key: img.key,
-                url: '',
+                url: resolveMediaPublicUrl(img.key),
                 alt_text: img.altText,
                 position: img.position,
               })),

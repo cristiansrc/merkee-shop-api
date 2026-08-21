@@ -136,7 +136,9 @@ export class SetCartItemQuantityUseCase {
 
       const responseJson: SetCartItemQuantitySuccess = {
         cartWithItems: allItems!,
-        products: new Map([[productId, product]]),
+        products: await this.productLookup.findActiveForCartByIds(
+          allItems!.items.map((i) => i.productId),
+        ),
       };
 
       await ctx.idempotency.save({

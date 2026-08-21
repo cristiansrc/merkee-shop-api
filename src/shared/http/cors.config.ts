@@ -29,7 +29,7 @@ const ALLOWED_HEADERS = [
 ] as const;
 
 /** Métodos HTTP permitidos. */
-const ALLOWED_METHODS = ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'] as const;
+const ALLOWED_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as const;
 
 /**
  * Resuelve la lista de origins CORS permitidos.

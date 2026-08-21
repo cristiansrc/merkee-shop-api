@@ -15,6 +15,7 @@ describe('SetCartItemQuantityUseCase', () => {
   };
   const mockProductLookup = {
     findActiveForCart: jest.fn(),
+    findActiveForCartByIds: jest.fn(),
   };
   const mockClock = {
     now: jest.fn(),
@@ -424,5 +425,81 @@ describe('SetCartItemQuantityUseCase', () => {
     if (isFailure(result)) {
       expect(result.error.code).toBe('RESERVATION_NOT_ACTIVE');
     }
+  });
+
+  it('carga todos los productos del carrito, no solo el mutado', async () => {
+    mockSessionLookup.findById.mockResolvedValue(validSession);
+    mockIdempotency.find.mockResolvedValue(null);
+
+    const product1 = {
+      id: 'prod-1',
+      name: 'Producto Test 1',
+      regularPriceCop: 5000n,
+      salePriceCop: 0n,
+      unit: 'kg',
+      stockOnHand: 10,
+      stockReserved: 2,
+      images: [],
+      category: { id: 'cat-1', name: 'Cat 1', imageKey: 'k1' },
+    };
+
+    const product2 = {
+      id: 'prod-2',
+      name: 'Producto Test 2',
+      regularPriceCop: 3000n,
+      salePriceCop: 0n,
+      unit: 'kg',
+      stockOnHand: 20,
+      stockReserved: 3,
+      images: [],
+      category: { id: 'cat-2', name: 'Cat 2', imageKey: 'k2' },
+    };
+
+    mockUnitOfWork.run.mockImplementation(async (work) => {
+      const ctx = {
+        cartRepo: {
+          findCartWithItems: jest.fn().mockResolvedValue({
+            cart: { id: 'cart-1', sessionId: 'session-123', status: 'ACTIVE', itemsSubtotalCop: 8000n, deliveryFeeCop: 5000n, ivaCop: 1520n, taxRateBasisPoints: 1900, totalCop: 14520n, reservationExpiresAt: new Date() },
+            items: [
+              { id: 'item-1', productId: 'prod-1', quantity: 1, unitPriceCop: 5000n, subtotalCop: 5000n, reservation: { id: 'res-1', status: 'ACTIVE' } },
+              { id: 'item-2', productId: 'prod-2', quantity: 1, unitPriceCop: 3000n, subtotalCop: 3000n, reservation: { id: 'res-2', status: 'ACTIVE' } },
+            ],
+          }),
+          findCartItem: jest.fn().mockResolvedValue({ id: 'item-1', quantity: 1 }),
+          updateCartItemQuantity: jest.fn(),
+          updateCartTotals: jest.fn(),
+          touchSession: jest.fn(),
+        },
+        stockReservation: {
+          adjustReservation: jest.fn(),
+        },
+        idempotency: {
+          findForUpdate: jest.fn().mockResolvedValue(null),
+          save: jest.fn(),
+        },
+      };
+      return work(ctx);
+    });
+
+    mockProductLookup.findActiveForCart.mockResolvedValue(product1);
+    mockProductLookup.findActiveForCartByIds.mockResolvedValue(
+      new Map([['prod-1', product1], ['prod-2', product2]]),
+    );
+
+    const result = await useCase.execute({
+      sessionId: 'session-123',
+      productId: 'prod-1',
+      quantity: 3,
+      idempotencyKey: '550e8400-e29b-41d4-a716-446655440000',
+      canonicalBody: '{"quantity":3}',
+    });
+
+    expect(isSuccess(result)).toBe(true);
+    if (isSuccess(result)) {
+      expect(result.value.products.size).toBe(2);
+      expect(result.value.products.has('prod-1')).toBe(true);
+      expect(result.value.products.has('prod-2')).toBe(true);
+    }
+    expect(mockProductLookup.findActiveForCartByIds).toHaveBeenCalledWith(['prod-1', 'prod-2']);
   });
 });

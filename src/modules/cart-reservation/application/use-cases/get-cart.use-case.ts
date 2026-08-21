@@ -62,8 +62,23 @@ export class GetCartUseCase {
     // 3. Buscar carrito
     const cartWithItems = await this.cartRepo.findCartWithItems(sessionId);
     if (!cartWithItems) {
-      // Sin carrito → devolver carrito vacío
-      return fail(CartErrors.sessionExpired());
+      // Sin carrito → devolver carrito vacío ACTIVE (AC-02)
+      const emptyCart = {
+        cart: {
+          id: '',
+          sessionId,
+          status: 'ACTIVE' as const,
+          itemsSubtotalCop: 0n,
+          deliveryFeeCop: 5000n,
+          ivaCop: 0n,
+          taxRateBasisPoints: 1900,
+          totalCop: 5000n,
+          reservationExpiresAt: null,
+        },
+        items: [],
+      };
+      await this.cartRepo.touchSession(sessionId, now);
+      return ok({ cartWithItems: emptyCart, products: new Map() });
     }
 
     // 4. Verificar expiración de reserva

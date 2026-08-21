@@ -9,4 +9,7 @@ import { CartProduct } from '../models';
 export interface ProductLookupPort {
   /** Busca un producto activo por ID para uso del carrito. */
   findActiveForCart(productId: string): Promise<CartProduct | null>;
+
+  /** Busca múltiples productos activos por IDs para uso del carrito. */
+  findActiveForCartByIds(productIds: readonly string[]): Promise<Map<string, CartProduct>>;
 }

@@ -199,7 +199,9 @@ export class AddCartItemUseCase {
       // Persistir idempotencia
       const responseJson: AddCartItemSuccess = {
         cartWithItems: allItems!,
-        products: new Map([[productId, product]]),
+        products: await this.productLookup.findActiveForCartByIds(
+          allItems!.items.map((i) => i.productId),
+        ),
         createdCartItem: !existingItem,
       };
 

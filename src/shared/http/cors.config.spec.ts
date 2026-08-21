@@ -175,13 +175,19 @@ describe('CORS Configuration', () => {
       expect(corsOptions.exposedHeaders).toContain('x-request-id');
     });
 
-    it('incluye todos los métodos requeridos', () => {
+    it('incluye todos los métodos requeridos incluyendo PUT', () => {
       const methods = corsOptions.methods as string[];
       expect(methods).toContain('GET');
       expect(methods).toContain('POST');
+      expect(methods).toContain('PUT');
       expect(methods).toContain('PATCH');
       expect(methods).toContain('DELETE');
       expect(methods).toContain('OPTIONS');
+    });
+
+    it('incluye PUT para preflight de cambio de cantidad', () => {
+      const methods = corsOptions.methods as string[];
+      expect(methods).toContain('PUT');
     });
 
     it('incluye headers de negocio y tracing', () => {
