@@ -284,4 +284,47 @@ describe('CatalogController', () => {
       expect(await c.listProducts('0', '0', undefined, undefined, req())).toBeDefined();
     });
   });
+
+  describe('Media public URL mapping', () => {
+    const KEY = 'media/2026/08/20/uuid.jpg';
+    const URL = 'https://images.merkee.shop/media/2026/08/20/uuid.jpg';
+
+    it('resuelve url en categoría pública', async () => {
+      (listCategoriesFn.listCategories as jest.Mock).mockResolvedValue(ok([{ id: 'c1', name: 'F', imageKey: KEY, version: 1 }]));
+      const res: any = await c.listCategories(req());
+      expect(res).toEqual([{ id: 'c1', name: 'F', image: { key: KEY, url: URL, alt_text: '', position: 0 }, version: 1 }]);
+    });
+
+    it('resuelve url en banner público', async () => {
+      (listActiveBannersFn.listActiveBanners as jest.Mock).mockResolvedValue(ok([{ id: 'b1', name: 'B', imageKey: KEY, targetPath: '/', displayOrder: 1, active: true, version: 1 }]));
+      const res: any = await c.listActiveBanners(req());
+      expect(res).toEqual([{ id: 'b1', name: 'B', image: { key: KEY, url: URL, alt_text: '', position: 0 }, target_path: '/', display_order: 1, active: true, version: 1 }]);
+    });
+
+    it('resuelve url en imágenes de producto público (categoría embebida sin key queda vacía)', async () => {
+      const item = { id: 'p1', category: { id: 'c1', name: 'F' }, name: 'M', description: '', regularPriceCop: 1, salePriceCop: 1, unit: 'u', stockAvailable: 1, images: [{ key: KEY, altText: 'alt', position: 0 }], version: 1 };
+      (listProductsFn.listProducts as jest.Mock).mockResolvedValue(ok({ items: [item], page: 1, size: 20, total: 1 }));
+      const res: any = await c.listProducts(undefined, undefined, undefined, undefined, req());
+      expect(res.items[0].images).toEqual([{ key: KEY, url: URL, alt_text: 'alt', position: 0 }]);
+      expect(res.items[0].category.image).toEqual({ key: '', url: '', alt_text: '', position: 0 });
+    });
+
+    it('resuelve url en categoría admin', async () => {
+      (adminCategoryFns.adminListCategories as jest.Mock).mockResolvedValue(ok([{ id: 'c1', name: 'F', imageKey: KEY, version: 1 }]));
+      const res: any = await c.adminListCategories(req());
+      expect(res).toEqual([{ id: 'c1', name: 'F', image: { key: KEY, url: URL, alt_text: '', position: 0 }, version: 1 }]);
+    });
+
+    it('resuelve url en imágenes de producto admin', async () => {
+      (adminProductFns.adminListProducts as jest.Mock).mockResolvedValue(ok({ items: [{ id: 'p1', categoryId: 'c1', name: 'M', description: '', regularPriceCop: 1, salePriceCop: 1, unit: 'u', stockOnHand: 1, stockReserved: 0, images: [{ key: KEY, altText: 'alt', position: 0 }], version: 1 }], page: 1, size: 20, total: 1 }));
+      const res: any = await c.adminListProducts('1', '20', req());
+      expect(res.items[0].images).toEqual([{ key: KEY, url: URL, alt_text: 'alt', position: 0 }]);
+    });
+
+    it('resuelve url en banner admin', async () => {
+      (adminBannerFns.adminListBanners as jest.Mock).mockResolvedValue(ok([{ id: 'b1', name: 'B', imageKey: KEY, targetPath: '/', displayOrder: 1, active: true, version: 1 }]));
+      const res: any = await c.adminListBanners(req());
+      expect(res).toEqual([{ id: 'b1', name: 'B', image: { key: KEY, url: URL, alt_text: '', position: 0 }, target_path: '/', display_order: 1, active: true, version: 1 }]);
+    });
+  });
 });

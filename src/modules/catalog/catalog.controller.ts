@@ -20,6 +20,7 @@ import { DomainError } from '../../shared/domain/domain-error';
 import { TransportValidationPipe } from '../../shared/http/transport-validation.pipe';
 import { TransportAuthGuard } from '../../shared/http/transport-auth.guard';
 import { projectResult } from '../../shared/http/result-projector';
+import { resolveMediaPublicUrl } from '../../shared/http/media-url';
 import {
   validateCategoryWriteRequest,
   validateProductWriteRequest,
@@ -167,7 +168,7 @@ function mapCategoryResponse(c: CategoryView) {
   return {
     id: c.id,
     name: c.name,
-    image: { key: c.imageKey, url: '', alt_text: '', position: 0 },
+    image: { key: c.imageKey, url: resolveMediaPublicUrl(c.imageKey), alt_text: '', position: 0 },
     version: c.version,
   };
 }
@@ -182,7 +183,7 @@ function mapProductResponse(p: ProductView) {
     sale_price_cop: p.salePriceCop,
     unit: p.unit,
     stock_available: p.stockAvailable,
-    images: p.images.map((img) => ({ key: img.key, url: '', alt_text: img.altText, position: img.position })),
+    images: p.images.map((img) => ({ key: img.key, url: resolveMediaPublicUrl(img.key), alt_text: img.altText, position: img.position })),
     version: p.version,
   };
 }
@@ -197,7 +198,7 @@ function mapProductDetailResponse(p: ProductDetailView) {
     sale_price_cop: p.salePriceCop,
     unit: p.unit,
     stock_available: p.stockAvailable,
-    images: p.images.map((img) => ({ key: img.key, url: '', alt_text: img.altText, position: img.position })),
+    images: p.images.map((img) => ({ key: img.key, url: resolveMediaPublicUrl(img.key), alt_text: img.altText, position: img.position })),
     version: p.version,
   };
 }
@@ -206,7 +207,7 @@ function mapBannerResponse(b: BannerView) {
   return {
     id: b.id,
     name: b.name,
-    image: { key: b.imageKey, url: '', alt_text: '', position: 0 },
+    image: { key: b.imageKey, url: resolveMediaPublicUrl(b.imageKey), alt_text: '', position: 0 },
     target_path: b.targetPath,
     display_order: b.displayOrder,
     active: b.active,
@@ -218,7 +219,7 @@ function mapAdminCategoryResponse(c: AdminCreateCategoryView) {
   return {
     id: c.id,
     name: c.name,
-    image: { key: c.imageKey, url: '', alt_text: '', position: 0 },
+    image: { key: c.imageKey, url: resolveMediaPublicUrl(c.imageKey), alt_text: '', position: 0 },
     version: c.version,
   };
 }
@@ -235,7 +236,7 @@ function mapAdminProductResponse(p: AdminProductView) {
     stock_on_hand: p.stockOnHand,
     stock_reserved: p.stockReserved,
     stock_available: p.stockOnHand - p.stockReserved,
-    images: p.images.map((img) => ({ key: img.key, url: '', alt_text: img.altText, position: img.position })),
+    images: p.images.map((img) => ({ key: img.key, url: resolveMediaPublicUrl(img.key), alt_text: img.altText, position: img.position })),
     version: p.version,
   };
 }
@@ -244,7 +245,7 @@ function mapAdminBannerResponse(b: AdminBannerView) {
   return {
     id: b.id,
     name: b.name,
-    image: { key: b.imageKey, url: '', alt_text: '', position: 0 },
+    image: { key: b.imageKey, url: resolveMediaPublicUrl(b.imageKey), alt_text: '', position: 0 },
     target_path: b.targetPath,
     display_order: b.displayOrder,
     active: b.active,
