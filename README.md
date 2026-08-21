@@ -7,6 +7,96 @@ Backend / API del ecosistema **merkee.shop** (supermercado digital colombiano,
 > Parte del workspace `merkee-workspace`. La fuente de verdad es
 > `docs/specs/master_spec.md` y el contrato `docs/api/openapi.yaml`.
 
+## Nota de entrega y trabajo post-entrega
+
+> Resumen operativo del handoff. No expone secretos, tokens ni valores de
+> Secrets Manager. Las URLs/DNS se citan solo cuando provienen del contexto
+> verificado.
+
+### Estado al momento de la entrega — 2026-08-18 por la mañana
+
+Estado **reconstruido a partir de la evidencia disponible** (auditoría inicial y
+revisión en disco); no se presenta como una medición exacta con timestamp del
+momento. En ese punto:
+
+- La **API funcionaba localmente** con NestJS + Prisma + tests (build y suites
+  locales en verde según la revisión en disco de 2026-08-18).
+- El **despliegue AWS no estaba operativo**:
+  - ECR `merkee-backend-api` **sin imagen** según la auditoría inicial.
+  - ECS con **desired 1 / running 0** (servicio en rollback / circuit breaker).
+  - **Puertos y health check desalineados** (app 3000 / task 80 / target group
+    8080; `/health` pendiente de alinear).
+  - **Secrets Manager / RDS / DNS pendientes** de verificación operativa.
+
+No se atribuyen bugs posteriores a este estado salvo que exista evidencia que
+los vincule; el registro de incidentes de ese momento se mantiene en
+`docs/DEPLOYMENT_STATUS.md`.
+
+### Trabajo realizado después de la entrega — 2026-08-19
+
+Hechos **verificados** durante la sesión de 2026-08-19:
+
+- Sesión AWS **reautenticada**.
+- ECS **alineado a subnets 1a/1d** y **task port 3000**.
+- **Migraciones Prisma 001–014 aplicadas**.
+- Fallo del **cart reaper** confirmado como `SET LOCAL statement_timeout`
+  parametrizado (`42601` / `P2010`); corregido con literal seguro `Prisma.raw`.
+- **Pruebas añadidas** y verificación de: `build`, **127 suites / 1239 tests**,
+  `dependency-cruiser` y `prisma validate`.
+- Imagen **`20260819-cart-reaper-health-fix`** construida y pusheada (digest
+  `sha256:04afdc…`).
+- **Task definition 16**; target group **`merkee-backend-tg-v2`** puerto **3000**
+  y path **`/health`**.
+- ECS **running = 1 / desired = 1**, rollout **COMPLETED**, target **healthy**.
+- Logs `cart_reaper.batch_completed` **sin fallos observados**.
+
+### Pendiente tras la corrección
+
+- **DNS (Spaceship):** resuelto en la verificación post-entrega — `api.merkee.shop`
+  ahora apunta vía **CNAME al DNS del ALB** y está **propagado** (dejó de devolver
+  301 a `www.merkee.shop`). El detalle verificado está en
+  `### Verificación post-entrega (resultado verificado posterior)`.
+- **Seguridad / deuda pendiente:**
+  - RDS `PubliclyAccessible = true`.
+  - Security Group default permisivo / root.
+  - Observabilidad / alarmas CloudWatch pendientes.
+  - Una sola task / una sola AZ.
+  - Adapters externos / fakes (`FakeS3MediaStorageAdapter`,
+    `FakePaymentProviderAdapter`, `NoopEmailAdapter`).
+- **Declaración:** el servicio está **técnicamente estable detrás del ALB**, pero
+  **no se declara producción lista** (ver gates abiertos en este README).
+
+### Verificación post-entrega (resultado verificado posterior)
+
+Hechos **verificados** en la comprobación posterior al despliegue de 2026-08-19:
+
+- **DNS (Spaceship):** el CNAME `api.merkee.shop` está **propagado** y apunta al
+  ALB (ya no redirige a `www.merkee.shop`).
+- **Ingress de red:** se habilitó el ingress TCP **443** y **80** en el Security
+  Group `sg-049d2e925bdf67678`.
+- **Redirección HTTP→HTTPS:** `http://api.merkee.shop` devuelve **301** a
+  `https://api.merkee.shop`.
+- **Health check público:** `GET https://api.merkee.shop/health` devuelve **200**
+  con cuerpo `{"status":"ok"}` (sin autenticación, sin acceso a BD ni secretos).
+- **ECS:** servicio **running = 1 / desired = 1**, rollout **COMPLETED**, target
+  **healthy**; logs `cart_reaper` **sin `batch_failed` recientes**.
+
+> **Deuda de hardening / operación (no invalida lo verificado arriba):**
+> - El Security Group `sg-049d2e925bdf67678` **se comparte todavía entre el ALB y
+>   ECS** (no hay SG dedicado por recurso).
+> - Existen **target groups legacy** (anteriores a `merkee-backend-tg-v2`) sin
+>   limpiar.
+> - **No hay alarmas CloudWatch** configuradas (observabilidad pendiente).
+
+### Tabla resumen
+
+| Estado | Evidencia | Fecha |
+|---|---|---|
+| Entrega (mañana) — API local OK, AWS no operativo | Auditoría inicial + revisión en disco: ECR sin imagen, ECS 1/0, rollback, puertos/health desalineados, Secrets/RDS/DNS pendientes | 2026-08-18 |
+| Post-entrega — corrección cart reaper + despliegue | Sesión AWS reauth; ECS subnets 1a/1d + port 3000; migraciones 001–014; `Prisma.raw` fix; 127 suites/1239 tests; imagen `20260819-cart-reaper-health-fix` (sha256:04afdc…); TD 16; TG `merkee-backend-tg-v2`:3000/`/health`; ECS 1/1 COMPLETED healthy; logs sin fallos | 2026-08-19 |
+| Pendiente tras corrección — seguridad/deuda (DNS resuelto en verificación posterior) | `api.merkee.shop` resuelto vía CNAME al ALB (ver verificación posterior); RDS público, SG compartido ALB/ECS, observabilidad/alarmas, 1 task/AZ, fakes | 2026-08-19 (abierto) |
+| Verificación post-entrega — DNS + ingress + health + ECS | CNAME `api.merkee.shop` propagado (ALB); ingress TCP 443/80 en `sg-049d2e925bdf67678`; HTTP 301→HTTPS; `GET https://api.merkee.shop/health` → 200 `{"status":"ok"}`; ECS 1/1 COMPLETED healthy; `cart_reaper` sin `batch_failed` | 2026-08-19 (verificado posterior) |
+
 ## Objetivo y alcance
 
 Exponer la lógica de negocio y el contrato HTTP del ecosistema: identidad y
@@ -146,8 +236,13 @@ La API escucha en `PORT` (default 3000). Existe un endpoint de liveness
 por `app.module.ts`). **Nota de despliegue:** el `Dockerfile` tiene un comentario
 stale que afirma lo contrario; el endpoint SÍ está presente en la fuente actual.
 El estado del despliegue ECS, el health check y la alineación de puertos se
-documentan en `docs/DEPLOYMENT_STATUS.md` (incidente actual: rollback/circuit
-breaker, P1001 ya corregido, puertos/health check desalineados).
+documentan en `docs/DEPLOYMENT_STATUS.md` y en `## Nota de entrega y trabajo
+post-entrega`. El incidente de 2026-08-18 (rollback/circuit breaker, P1001 ya
+corregido, puertos/health check desalineados) fue resuelto el 2026-08-19: ECS
+  alineado a subnets 1a/1d, task port 3000, target group `merkee-backend-tg-v2`
+  (`:3000`/`/health`), ECS running 1/1 COMPLETED. Seguridad/deuda siguen
+  pendientes (DNS resuelto en verificación post-entrega; ver
+  `## Nota de entrega y trabajo post-entrega`).
 
 El bootstrap del admin inicial
 (`cristiansrc@gmail.com`, `must_change_password=true`) se ejecuta al arrancar si
@@ -179,7 +274,9 @@ npm run depcruise        # prueba de arquitectura (dependency-cruiser)
 - **Última medición local (comando `npm run test:cov`, exit code 0):**
   **125 suites / 1232 tests PASS**, `build` OK, `depcruise` sin violaciones.
   Esta cifra corresponde a la ejecución local documentada, no a un reporte de
-  CI externo.
+  CI externo. Esta es la medición de pre-entrega (2026-08-18); la verificación
+  post-entrega del 2026-08-19 reportó **127 suites / 1239 tests** (ver
+  `## Nota de entrega y trabajo post-entrega`).
 - **Cobertura (medición local final, `npm run test:cov`):**
   - **Statements:** 93.36%
   - **Branches:** 84.43%
@@ -196,18 +293,31 @@ npm run depcruise        # prueba de arquitectura (dependency-cruiser)
   logout` (ROP sign, TD-NEW-ROP-SIGN, incremento `msf-id-rop-sign-cleanup`
   en `planning`); protecciones HTTP de borde (TD-NEW-HTTP-SEC).
 
-## Estado de AWS (revisado 2026-08-18)
+## Estado de AWS (revisado 2026-08-18; actualizado 2026-08-19)
 
 **AWS configurado** en cuenta de aprendizaje, región `us-east-1`, un único
-ambiente. Estado del despliegue: **en despliegue / pendiente de verificación**
-(task definition `merkee-backend-task` revision 2 con `taskRole`
-`merkee-backend-task-role` y mapeo `secrets` JSON; servicio `merkee-backend-service`
-con running/health check por confirmar). No se afirma despliegue productivo
-terminado.
+ambiente.
+
+**Histórico (2026-08-18, mañana de entrega):** el despliegue estaba **en
+despliegue / pendiente de verificación** (task definition `merkee-backend-task`
+revision 2 con `taskRole` `merkee-backend-task-role` y mapeo `secrets` JSON;
+servicio `merkee-backend-service` con running/health check por confirmar; ECS
+desired 1 / running 0 en rollback/circuit breaker; ECR sin imagen según auditoría
+inicial; puertos y health check desalineados). No se afirmaba despliegue
+productivo terminado.
+
+**Actual (2026-08-19, post-entrega):** el servicio fue corregido y llevado a
+estado estable — ver `## Nota de entrega y trabajo post-entrega`. Resumen:
+task definition **16**, target group **`merkee-backend-tg-v2`** (puerto **3000**,
+path **`/health`**), ECS **running = 1 / desired = 1**, rollout **COMPLETED**,
+  target **healthy**. El servicio es **técnicamente estable detrás del ALB** pero
+  **no se declara producción lista** (seguridad/deuda pendiente; DNS resuelto en
+  verificación post-entrega, ver nota y `docs/DEPLOYMENT_STATUS.md`).
 
 - **Imagen:** Dockerfile multi-stage no-root creado y **build local validado**;
-  repositorio ECR `merkee-backend-api` existe; push/despliegue pendiente de
-  verificación.
+  repositorio ECR `merkee-backend-api` existe. Imagen
+  **`20260819-cart-reaper-health-fix`** (digest `sha256:04afdc…`) construida y
+  pusheada el 2026-08-19.
 - **Secretos:** el secreto `merkee/app` (AWS Secrets Manager) está creado y es
   referenciado por la task definition vía mapeo `secrets` JSON. **No se exponen
   valores.** Las variables inyectadas son las del cuadro `Variables de entorno`
@@ -220,13 +330,29 @@ terminado.
 - **Pendiente de verificación / deuda:** validación final ECS (TD-AWS-ECS-VALIDATION),
   RDS público (TD-AWS-RDS-PUBLIC), alarms/observabilidad CloudWatch
   (TD-AWS-OBSERVABILITY) y `swagger.merkee.shop` (TD-AWS-SWAGGER-DNS).
-- **Incidente de despliegue actual:** ver `docs/DEPLOYMENT_STATUS.md` (ECS en
-  rollback/circuit breaker; P1001 por conectividad RDS ya corregido; desalineación
-  de puertos app 3000 / task 80 / target group 8080 y health check `/health`
-  pendiente de alinear). No se afirma servicio sano.
+- **Incidente de despliegue:** ver `docs/DEPLOYMENT_STATUS.md`. El incidente de
+  2026-08-18 (ECS en rollback/circuit breaker; P1001 por conectividad RDS ya
+  corregido; desalineación de puertos app 3000 / task 80 / target group 8080 y
+  health check `/health`) fue resuelto el 2026-08-19 mediante la alineación de
+  ECS a subnets 1a/1d, task port 3000, target group v2 y la corrección del cart
+  reaper. No se afirma servicio sano de forma incondicional: la seguridad/deuda
+  sigue pendiente (DNS resuelto en verificación post-entrega; ver
+  `## Nota de entrega y trabajo post-entrega`).
 
 No se solicitan secretos por chat. La configuración de infra no altera el estado
 de las specs (`validated-not-executed`); es estado operativo adicional.
+
+> **Rehidratación honesta 2026-08-21:** este README conserva la trazabilidad histórica
+> 2026-08-18 (API local OK, AWS no operativo ECR 0, ECS 1/0, puertos/health
+> desalineados) y la verifica al **2026-08-21**: ECS estable, ECR publicado, CORS
+> allowlist + PUT (`7fdb009`/`932a71a`), media `images.merkee.shop` OAC
+> (`91ed871`/`02167cd`), prefijo `/v1` (`215b36b`), JWT guard real + `cookie-parser`
+> + `clearCookie` (`932a71a`/`9e3ad3e`), `register` cliente `must_change=false`
+> (`f62cee4`), cart guest→cliente transfer (`8948426`/`fe0b121`), sesión 30m
+> (`580ff8f`). **No se declara producción lista** — gates RDS público,
+> observabilidad, legal y scheduler siguen abiertos; evidencia fechada, puede
+> cambiar. Ver sección `## Nota de entrega y trabajo post-entrega` y
+> `../../docs/DEPLOYMENT_STATUS.md`.
 
 ## Pendientes de decisión
 
