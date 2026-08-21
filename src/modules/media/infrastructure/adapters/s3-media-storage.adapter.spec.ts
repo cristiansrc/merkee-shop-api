@@ -71,7 +71,6 @@ describe('S3MediaStorageAdapter', () => {
       Key: 'media/test.jpg',
       ContentType: 'image/jpeg',
       ContentLength: 2048,
-      ACL: 'private',
     });
     expect(getSignedUrl).toHaveBeenCalledWith(
       expect.anything(),
@@ -81,6 +80,17 @@ describe('S3MediaStorageAdapter', () => {
     expect(result.url).toBe('https://s3.test-bucket.amazonaws.com/signed-url');
     expect(result.expiresAt).toBeInstanceOf(Date);
     expect(result.expiresAt.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('no envía ACL en el PutObjectCommand (BucketOwnerEnforced)', async () => {
+    const { PutObjectCommand } = await import('@aws-sdk/client-s3');
+
+    const adapter = new S3MediaStorageAdapter(300);
+    await adapter.createUploadUrl('media/test.jpg', 'image/jpeg', 2048);
+
+    const commandInput = (PutObjectCommand as unknown as jest.Mock).mock.calls[0][0];
+    expect(commandInput).not.toHaveProperty('ACL');
+    expect(commandInput).not.toHaveProperty('Acl');
   });
 
   it('usa TTL personalizado', async () => {

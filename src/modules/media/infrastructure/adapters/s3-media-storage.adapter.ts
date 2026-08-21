@@ -50,8 +50,8 @@ export class S3MediaStorageAdapter implements MediaStoragePort {
         Key: key,
         ContentType: contentType,
         ContentLength: sizeBytes,
-        // Bucket privado: sin acceso público
-        ACL: 'private',
+        // Bucket privado con ObjectOwnership=BucketOwnerEnforced:
+        // NO se envía ACL, ya que sería rechazado con AccessControlListNotSupported.
       });
 
       const url = await getSignedUrl(client, command, {
