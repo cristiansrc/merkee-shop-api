@@ -96,6 +96,22 @@ describe('PrismaProductRepositoryAdapter', () => {
       const result = await adapter.listAll(1, 10);
       expect(result.items).toHaveLength(1);
     });
+
+    it('excluye productos soft-deleted', async () => {
+      const active = makeRow({ id: 'p-active', deletedAt: null });
+      (prisma.product.findMany as jest.Mock).mockResolvedValue([active]);
+      (prisma.product.count as jest.Mock).mockResolvedValue(1);
+
+      const result = await adapter.listAll(1, 10);
+      expect(prisma.product.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { deletedAt: null } }),
+      );
+      expect(prisma.product.count).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { deletedAt: null } }),
+      );
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0].product.id).toBe('p-active');
+    });
   });
 
   describe('create', () => {

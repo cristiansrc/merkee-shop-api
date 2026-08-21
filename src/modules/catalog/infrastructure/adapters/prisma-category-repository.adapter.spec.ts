@@ -42,6 +42,19 @@ describe('PrismaCategoryRepositoryAdapter', () => {
       const result = await adapter.listAll();
       expect(result).toHaveLength(1);
     });
+
+    it('excluye categorías soft-deleted', async () => {
+      const active = makeRow({ id: 'cat-active', deletedAt: null });
+      const deleted = makeRow({ id: 'cat-deleted', deletedAt: new Date() });
+      (prisma.category.findMany as jest.Mock).mockResolvedValue([active]);
+
+      const result = await adapter.listAll();
+      expect(prisma.category.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { deletedAt: null } }),
+      );
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('cat-active');
+    });
   });
 
   describe('listActive', () => {

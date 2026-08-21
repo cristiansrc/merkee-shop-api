@@ -11,6 +11,7 @@ export class PrismaCategoryRepositoryAdapter implements CategoryRepositoryPort {
 
   async listAll(): Promise<readonly CategoryRecord[]> {
     const rows = await this.prisma.category.findMany({
+      where: { deletedAt: null },
       orderBy: { name: 'asc' },
     });
     return rows.map(this.toRecord);

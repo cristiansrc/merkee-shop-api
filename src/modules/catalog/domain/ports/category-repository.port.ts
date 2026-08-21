@@ -14,7 +14,7 @@ export interface CategoryRecord {
 }
 
 export interface CategoryRepositoryPort {
-  /** Lista todas las categorías (admin: incluye inactive). */
+  /** Lista categorías para admin (excluye soft-deleted, incluye inactive). */
   listAll(): Promise<readonly CategoryRecord[]>;
 
   /** Lista categorías activas (público). */

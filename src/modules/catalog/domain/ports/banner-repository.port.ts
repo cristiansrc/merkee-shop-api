@@ -20,7 +20,7 @@ export interface BannerRepositoryPort {
   /** Lista banners activos ordenados por display_order (público). */
   listActive(): Promise<readonly BannerRecord[]>;
 
-  /** Lista todos los banners (admin, incluidos inactive). */
+  /** Lista banners para admin (excluye soft-deleted, incluye inactive). */
   listAll(): Promise<readonly BannerRecord[]>;
 
   /** Busca un banner por id (incluidos soft-deleted). */

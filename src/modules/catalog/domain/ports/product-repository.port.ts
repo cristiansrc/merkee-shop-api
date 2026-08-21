@@ -60,7 +60,7 @@ export interface ProductRepositoryPort {
     size: number,
   ): Promise<ProductPage>;
 
-  /** Lista productos para admin (incluidos soft-deleted). */
+  /** Lista productos para admin (excluye soft-deleted). */
   listAll(page: number, size: number): Promise<ProductPage>;
 
   /** Crea un producto con imágenes. */

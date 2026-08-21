@@ -49,6 +49,29 @@ describe('PrismaBannerRepositoryAdapter', () => {
       const result = await adapter.listAll();
       expect(result).toHaveLength(1);
     });
+
+    it('excluye banners soft-deleted', async () => {
+      const active = makeRow({ id: 'b-active', deletedAt: null });
+      (prisma.banner.findMany as jest.Mock).mockResolvedValue([active]);
+
+      const result = await adapter.listAll();
+      expect(prisma.banner.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { deletedAt: null } }),
+      );
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('b-active');
+    });
+
+    it('no filtra por active en listAll (admin ve todos, incluidos inactive)', async () => {
+      (prisma.banner.findMany as jest.Mock).mockResolvedValue([makeRow({ active: false })]);
+
+      const result = await adapter.listAll();
+      expect(prisma.banner.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { deletedAt: null } }),
+      );
+      expect(result).toHaveLength(1);
+      expect(result[0].active).toBe(false);
+    });
   });
 
   describe('findById', () => {

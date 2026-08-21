@@ -108,14 +108,16 @@ export class PrismaProductRepositoryAdapter implements ProductRepositoryPort {
   }
 
   async listAll(page: number, size: number): Promise<ProductPage> {
+    const where = { deletedAt: null };
     const [rows, total] = await Promise.all([
       this.prisma.product.findMany({
+        where,
         include: { images: { orderBy: { position: 'asc' } } },
         orderBy: { name: 'asc' },
         skip: (page - 1) * size,
         take: size,
       }),
-      this.prisma.product.count(),
+      this.prisma.product.count({ where }),
     ]);
     return {
       items: rows.map((r: typeof rows[number]) => ({

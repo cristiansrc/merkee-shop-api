@@ -19,6 +19,7 @@ export class PrismaBannerRepositoryAdapter implements BannerRepositoryPort {
 
   async listAll(): Promise<readonly BannerRecord[]> {
     const rows = await this.prisma.banner.findMany({
+      where: { deletedAt: null },
       orderBy: { displayOrder: 'asc' },
     });
     return rows.map(this.toRecord);
