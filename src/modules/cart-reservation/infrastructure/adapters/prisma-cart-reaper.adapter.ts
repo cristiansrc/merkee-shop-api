@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { CartPrismaService } from '../cart-prisma.service';
 import {
   CartReaperPort,
@@ -27,8 +28,13 @@ export class PrismaCartReaperAdapter implements CartReaperPort {
   async expireBatch(now: Date, limit: number): Promise<ReaperBatchResult> {
     return this.prisma.$transaction(
       async (tx) => {
-        // Establecer timeout de transacción (5s)
-        await tx.$executeRaw`SET LOCAL statement_timeout = ${REAPER_TRANSACTION_TIMEOUT_MS}`;
+        // `SET LOCAL` no acepta parámetros; el literal solo deriva de la
+        // constante interna y nunca de input externo.
+        await tx.$executeRaw(
+          Prisma.raw(
+            `SET LOCAL statement_timeout = '${REAPER_TRANSACTION_TIMEOUT_MS}ms'`,
+          ),
+        );
 
         // Seleccionar reservas ACTIVE expiradas con FOR UPDATE SKIP LOCKED
         const expiredReservations = await tx.$queryRaw<

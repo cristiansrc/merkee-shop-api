@@ -53,6 +53,7 @@ describe('FakePaymentProviderAdapter', () => {
     adapter.onCreatePayment(async (req) => ({
       providerPaymentId: `custom-${req.orderId}`,
       status: 'DECLINED',
+      checkoutUrl: `https://checkout.example.test/p/${req.orderId}`,
     }));
 
     const result = await adapter.createPayment({
