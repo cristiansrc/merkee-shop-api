@@ -115,8 +115,8 @@ ENV PORT=3000
 # Puerto expuesto
 EXPOSE 3000
 
-# No healthcheck: el main.ts no expusa endpoint /health real
-# Si se añade GET /health, agregar:
+# El endpoint GET /health existe en HealthModule; no se activa HEALTHCHECK aquí
+# hasta reconstruir la imagen activa y alinear el health check del despliegue:
 # HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
 #   CMD node -e "require('http').get('http://localhost:3000/health', (r) => { process.exit(r.statusCode === 200 ? 0 : 1) })"
 
