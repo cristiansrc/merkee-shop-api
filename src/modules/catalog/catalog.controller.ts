@@ -227,7 +227,7 @@ function mapAdminCategoryResponse(c: AdminCreateCategoryView) {
 function mapAdminProductResponse(p: AdminProductView) {
   return {
     id: p.id,
-    category: { id: p.categoryId, name: '', image: { key: '', url: '', alt_text: '', position: 0 }, version: 1 },
+    category: { id: p.categoryId, name: p.categoryName, image: { key: '', url: '', alt_text: '', position: 0 }, version: p.categoryVersion },
     name: p.name,
     description: p.description,
     regular_price_cop: p.regularPriceCop,
@@ -467,6 +467,7 @@ export class CatalogController {
     const traceId = getTraceId(req);
     const result = await adminListProducts(
       this.productRepo,
+      this.categoryRepo,
       page ? parseInt(page, 10) || 1 : 1,
       size ? Math.min(Math.max(parseInt(size, 10) || 20, 1), 100) : 20,
     );
@@ -496,6 +497,7 @@ export class CatalogController {
 
     const result = await adminCreateProduct(
       this.productRepo,
+      this.categoryRepo,
       this.actorLookup,
       this.idempotencyPort,
       {
@@ -535,6 +537,7 @@ export class CatalogController {
 
     const result = await adminUpdateProduct(
       this.productRepo,
+      this.categoryRepo,
       this.actorLookup,
       this.idempotencyPort,
       {

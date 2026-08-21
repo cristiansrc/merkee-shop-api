@@ -316,9 +316,20 @@ describe('CatalogController', () => {
     });
 
     it('resuelve url en imágenes de producto admin', async () => {
-      (adminProductFns.adminListProducts as jest.Mock).mockResolvedValue(ok({ items: [{ id: 'p1', categoryId: 'c1', name: 'M', description: '', regularPriceCop: 1, salePriceCop: 1, unit: 'u', stockOnHand: 1, stockReserved: 0, images: [{ key: KEY, altText: 'alt', position: 0 }], version: 1 }], page: 1, size: 20, total: 1 }));
+      (adminProductFns.adminListProducts as jest.Mock).mockResolvedValue(ok({ items: [{ id: 'p1', categoryId: 'c1', categoryName: 'Frutas', categoryVersion: 2, name: 'M', description: '', regularPriceCop: 1, salePriceCop: 1, unit: 'u', stockOnHand: 1, stockReserved: 0, images: [{ key: KEY, altText: 'alt', position: 0 }], version: 1 }], page: 1, size: 20, total: 1 }));
       const res: any = await c.adminListProducts('1', '20', req());
       expect(res.items[0].images).toEqual([{ key: KEY, url: URL, alt_text: 'alt', position: 0 }]);
+    });
+
+    it('mapea el nombre y versión reales de la categoría en producto admin', async () => {
+      (adminProductFns.adminListProducts as jest.Mock).mockResolvedValue(ok({ items: [{ id: 'p1', categoryId: 'c1', categoryName: 'Frutas y Verduras', categoryVersion: 5, name: 'M', description: '', regularPriceCop: 1, salePriceCop: 1, unit: 'u', stockOnHand: 10, stockReserved: 2, images: [{ key: KEY, altText: 'alt', position: 0 }], version: 1 }], page: 1, size: 20, total: 1 }));
+      const res: any = await c.adminListProducts('1', '20', req());
+      expect(res.items[0].category).toEqual({
+        id: 'c1',
+        name: 'Frutas y Verduras',
+        image: { key: '', url: '', alt_text: '', position: 0 },
+        version: 5,
+      });
     });
 
     it('resuelve url en banner admin', async () => {

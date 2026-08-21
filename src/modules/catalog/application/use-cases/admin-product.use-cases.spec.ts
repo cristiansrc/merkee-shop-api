@@ -1,5 +1,6 @@
 import { adminListProducts, adminCreateProduct, adminUpdateProduct, adminDeleteProduct } from './admin-product.use-cases';
 import { ProductRepositoryPort, ProductWithImages, ProductPage } from '../../domain/ports/product-repository.port';
+import { CategoryRepositoryPort, CategoryRecord } from '../../domain/ports/category-repository.port';
 import { ActorLookupPort, ActorInfo } from '../../domain/ports/actor-lookup.port';
 import { CatalogIdempotencyPort } from '../../domain/ports/catalog-idempotency.port';
 import { isSuccess, isFailure } from '../../../../shared/domain/result';
@@ -56,6 +57,25 @@ describe('admin product use cases', () => {
     save: jest.fn(),
   };
 
+  const mockCategory: CategoryRecord = {
+    id: 'cat-1',
+    name: 'Frutas y Verduras',
+    imageKey: 'media/cat-1.jpg',
+    version: 3,
+    deletedAt: null,
+  };
+
+  const mockCategoryRepo: jest.Mocked<CategoryRepositoryPort> = {
+    listAll: jest.fn().mockResolvedValue([mockCategory]),
+    listActive: jest.fn().mockResolvedValue([mockCategory]),
+    findById: jest.fn().mockResolvedValue(mockCategory),
+    findActiveById: jest.fn().mockResolvedValue(mockCategory),
+    create: jest.fn().mockResolvedValue(mockCategory),
+    update: jest.fn().mockResolvedValue(mockCategory),
+    softDelete: jest.fn().mockResolvedValue(true),
+    countActiveProducts: jest.fn().mockResolvedValue(0),
+  };
+
   beforeEach(() => {
     jest.resetAllMocks();
     mockProductRepo.listAll.mockResolvedValue(mockProductPage);
@@ -65,11 +85,13 @@ describe('admin product use cases', () => {
     mockProductRepo.softDelete.mockResolvedValue(true);
     mockActorLookup.findById.mockResolvedValue(adminActor);
     mockIdempotency.find.mockResolvedValue(null);
+    mockCategoryRepo.listAll.mockResolvedValue([mockCategory]);
+    mockCategoryRepo.findById.mockResolvedValue(mockCategory);
   });
 
   describe('adminListProducts', () => {
     it('lista productos exitosamente', async () => {
-      const result = await adminListProducts(mockProductRepo, 1, 10);
+      const result = await adminListProducts(mockProductRepo, mockCategoryRepo, 1, 10);
       expect(isSuccess(result)).toBe(true);
       if (isSuccess(result)) {
         expect(result.value.items).toHaveLength(1);
@@ -80,9 +102,31 @@ describe('admin product use cases', () => {
       expect(mockProductRepo.listAll).toHaveBeenCalledWith(1, 10);
     });
 
+    it('resuelve el nombre y versión reales de la categoría', async () => {
+      const result = await adminListProducts(mockProductRepo, mockCategoryRepo, 1, 10);
+      expect(isSuccess(result)).toBe(true);
+      if (isSuccess(result)) {
+        expect(result.value.items[0].categoryId).toBe('cat-1');
+        expect(result.value.items[0].categoryName).toBe('Frutas y Verduras');
+        expect(result.value.items[0].categoryVersion).toBe(3);
+      }
+      expect(mockCategoryRepo.listAll).toHaveBeenCalled();
+    });
+
+    it('usa fallback neutro cuando la categoría no existe', async () => {
+      mockCategoryRepo.listAll.mockResolvedValue([]);
+      const result = await adminListProducts(mockProductRepo, mockCategoryRepo, 1, 10);
+      expect(isSuccess(result)).toBe(true);
+      if (isSuccess(result)) {
+        expect(result.value.items[0].categoryId).toBe('cat-1');
+        expect(result.value.items[0].categoryName).toBe('');
+        expect(result.value.items[0].categoryVersion).toBe(1);
+      }
+    });
+
     it('retorna technicalFailure cuando el repo lanza excepción', async () => {
       mockProductRepo.listAll.mockRejectedValue(new Error('DB down'));
-      const result = await adminListProducts(mockProductRepo, 1, 10);
+      const result = await adminListProducts(mockProductRepo, mockCategoryRepo, 1, 10);
       expect(isFailure(result)).toBe(true);
       if (isFailure(result)) {
         expect(result.error.code).toBe('TECHNICAL_DEPENDENCY_FAILURE');
@@ -105,15 +149,26 @@ describe('admin product use cases', () => {
     };
 
     it('crea producto exitosamente', async () => {
-      const result = await adminCreateProduct(mockProductRepo, mockActorLookup, mockIdempotency, validCommand);
+      const result = await adminCreateProduct(mockProductRepo, mockCategoryRepo, mockActorLookup, mockIdempotency, validCommand);
       expect(isSuccess(result)).toBe(true);
       expect(mockProductRepo.create).toHaveBeenCalled();
       expect(mockIdempotency.save).toHaveBeenCalled();
     });
 
+    it('resuelve el nombre real de la categoría al crear', async () => {
+      const result = await adminCreateProduct(mockProductRepo, mockCategoryRepo, mockActorLookup, mockIdempotency, validCommand);
+      expect(isSuccess(result)).toBe(true);
+      if (isSuccess(result)) {
+        expect(result.value.categoryId).toBe('cat-1');
+        expect(result.value.categoryName).toBe('Frutas y Verduras');
+        expect(result.value.categoryVersion).toBe(3);
+      }
+      expect(mockCategoryRepo.findById).toHaveBeenCalledWith('cat-1');
+    });
+
     it('rechaza actor no admin', async () => {
       mockActorLookup.findById.mockResolvedValue(clientActor);
-      const result = await adminCreateProduct(mockProductRepo, mockActorLookup, mockIdempotency, { ...validCommand, actorId: 'client-1' });
+      const result = await adminCreateProduct(mockProductRepo, mockCategoryRepo, mockActorLookup, mockIdempotency, { ...validCommand, actorId: 'client-1' });
       expect(isFailure(result)).toBe(true);
       if (isFailure(result)) {
         expect(result.error.code).toBe('ACTOR_NOT_AUTHORIZED');
@@ -122,7 +177,7 @@ describe('admin product use cases', () => {
 
     it('rechaza actor null', async () => {
       mockActorLookup.findById.mockResolvedValue(null);
-      const result = await adminCreateProduct(mockProductRepo, mockActorLookup, mockIdempotency, { ...validCommand, actorId: 'unknown' });
+      const result = await adminCreateProduct(mockProductRepo, mockCategoryRepo, mockActorLookup, mockIdempotency, { ...validCommand, actorId: 'unknown' });
       expect(isFailure(result)).toBe(true);
       if (isFailure(result)) {
         expect(result.error.code).toBe('ACTOR_NOT_AUTHORIZED');
@@ -131,7 +186,7 @@ describe('admin product use cases', () => {
 
     it('rechaza admin con mustChangePassword', async () => {
       mockActorLookup.findById.mockResolvedValue(adminMustChange);
-      const result = await adminCreateProduct(mockProductRepo, mockActorLookup, mockIdempotency, { ...validCommand, actorId: 'admin-2' });
+      const result = await adminCreateProduct(mockProductRepo, mockCategoryRepo, mockActorLookup, mockIdempotency, { ...validCommand, actorId: 'admin-2' });
       expect(isFailure(result)).toBe(true);
       if (isFailure(result)) {
         expect(result.error.code).toBe('INITIAL_PASSWORD_CHANGE_REQUIRED');
@@ -158,7 +213,7 @@ describe('admin product use cases', () => {
         bodyHash,
         responseJson: { id: 'prod-1', name: 'Nuevo Producto' },
       });
-      const result = await adminCreateProduct(mockProductRepo, mockActorLookup, mockIdempotency, validCommand);
+      const result = await adminCreateProduct(mockProductRepo, mockCategoryRepo, mockActorLookup, mockIdempotency, validCommand);
       expect(isSuccess(result)).toBe(true);
       expect(mockProductRepo.create).not.toHaveBeenCalled();
     });
@@ -170,7 +225,7 @@ describe('admin product use cases', () => {
         bodyHash: 'different-hash',
         responseJson: {},
       });
-      const result = await adminCreateProduct(mockProductRepo, mockActorLookup, mockIdempotency, validCommand);
+      const result = await adminCreateProduct(mockProductRepo, mockCategoryRepo, mockActorLookup, mockIdempotency, validCommand);
       expect(isFailure(result)).toBe(true);
       if (isFailure(result)) {
         expect(result.error.code).toBe('IDEMPOTENCY_KEY_REUSED');
@@ -179,7 +234,7 @@ describe('admin product use cases', () => {
 
     it('retorna technicalFailure en excepción', async () => {
       mockActorLookup.findById.mockRejectedValue(new Error('DB error'));
-      const result = await adminCreateProduct(mockProductRepo, mockActorLookup, mockIdempotency, validCommand);
+      const result = await adminCreateProduct(mockProductRepo, mockCategoryRepo, mockActorLookup, mockIdempotency, validCommand);
       expect(isFailure(result)).toBe(true);
       if (isFailure(result)) {
         expect(result.error.code).toBe('TECHNICAL_DEPENDENCY_FAILURE');
@@ -203,15 +258,26 @@ describe('admin product use cases', () => {
     };
 
     it('actualiza producto exitosamente', async () => {
-      const result = await adminUpdateProduct(mockProductRepo, mockActorLookup, mockIdempotency, validCommand);
+      const result = await adminUpdateProduct(mockProductRepo, mockCategoryRepo, mockActorLookup, mockIdempotency, validCommand);
       expect(isSuccess(result)).toBe(true);
       expect(mockProductRepo.update).toHaveBeenCalled();
       expect(mockIdempotency.save).toHaveBeenCalled();
     });
 
+    it('resuelve el nombre real de la categoría al actualizar', async () => {
+      const result = await adminUpdateProduct(mockProductRepo, mockCategoryRepo, mockActorLookup, mockIdempotency, validCommand);
+      expect(isSuccess(result)).toBe(true);
+      if (isSuccess(result)) {
+        expect(result.value.categoryId).toBe('cat-1');
+        expect(result.value.categoryName).toBe('Frutas y Verduras');
+        expect(result.value.categoryVersion).toBe(3);
+      }
+      expect(mockCategoryRepo.findById).toHaveBeenCalledWith('cat-1');
+    });
+
     it('rechaza actor no admin', async () => {
       mockActorLookup.findById.mockResolvedValue(clientActor);
-      const result = await adminUpdateProduct(mockProductRepo, mockActorLookup, mockIdempotency, { ...validCommand, actorId: 'client-1' });
+      const result = await adminUpdateProduct(mockProductRepo, mockCategoryRepo, mockActorLookup, mockIdempotency, { ...validCommand, actorId: 'client-1' });
       expect(isFailure(result)).toBe(true);
       if (isFailure(result)) {
         expect(result.error.code).toBe('ACTOR_NOT_AUTHORIZED');
@@ -220,7 +286,7 @@ describe('admin product use cases', () => {
 
     it('rechaza admin con mustChangePassword', async () => {
       mockActorLookup.findById.mockResolvedValue(adminMustChange);
-      const result = await adminUpdateProduct(mockProductRepo, mockActorLookup, mockIdempotency, { ...validCommand, actorId: 'admin-2' });
+      const result = await adminUpdateProduct(mockProductRepo, mockCategoryRepo, mockActorLookup, mockIdempotency, { ...validCommand, actorId: 'admin-2' });
       expect(isFailure(result)).toBe(true);
       if (isFailure(result)) {
         expect(result.error.code).toBe('INITIAL_PASSWORD_CHANGE_REQUIRED');
@@ -229,7 +295,7 @@ describe('admin product use cases', () => {
 
     it('retorna error cuando producto no existe', async () => {
       mockProductRepo.findById.mockResolvedValue(null);
-      const result = await adminUpdateProduct(mockProductRepo, mockActorLookup, mockIdempotency, validCommand);
+      const result = await adminUpdateProduct(mockProductRepo, mockCategoryRepo, mockActorLookup, mockIdempotency, validCommand);
       expect(isFailure(result)).toBe(true);
       if (isFailure(result)) {
         expect(result.error.code).toBe('RESOURCE_NOT_FOUND');
@@ -241,7 +307,7 @@ describe('admin product use cases', () => {
         ...mockProductWithImages,
         product: { ...mockProductWithImages.product, deletedAt: new Date() },
       });
-      const result = await adminUpdateProduct(mockProductRepo, mockActorLookup, mockIdempotency, validCommand);
+      const result = await adminUpdateProduct(mockProductRepo, mockCategoryRepo, mockActorLookup, mockIdempotency, validCommand);
       expect(isFailure(result)).toBe(true);
       if (isFailure(result)) {
         expect(result.error.code).toBe('RESOURCE_NOT_FOUND');
@@ -250,7 +316,7 @@ describe('admin product use cases', () => {
 
     it('retorna versionMismatch cuando update retorna null', async () => {
       mockProductRepo.update.mockResolvedValue(null);
-      const result = await adminUpdateProduct(mockProductRepo, mockActorLookup, mockIdempotency, validCommand);
+      const result = await adminUpdateProduct(mockProductRepo, mockCategoryRepo, mockActorLookup, mockIdempotency, validCommand);
       expect(isFailure(result)).toBe(true);
       if (isFailure(result)) {
         expect(result.error.code).toBe('VERSION_MISMATCH');
@@ -277,7 +343,7 @@ describe('admin product use cases', () => {
         bodyHash,
         responseJson: { id: 'prod-1', name: 'Producto Actualizado' },
       });
-      const result = await adminUpdateProduct(mockProductRepo, mockActorLookup, mockIdempotency, validCommand);
+      const result = await adminUpdateProduct(mockProductRepo, mockCategoryRepo, mockActorLookup, mockIdempotency, validCommand);
       expect(isSuccess(result)).toBe(true);
       expect(mockProductRepo.update).not.toHaveBeenCalled();
     });
@@ -289,7 +355,7 @@ describe('admin product use cases', () => {
         bodyHash: 'different-hash',
         responseJson: {},
       });
-      const result = await adminUpdateProduct(mockProductRepo, mockActorLookup, mockIdempotency, validCommand);
+      const result = await adminUpdateProduct(mockProductRepo, mockCategoryRepo, mockActorLookup, mockIdempotency, validCommand);
       expect(isFailure(result)).toBe(true);
       if (isFailure(result)) {
         expect(result.error.code).toBe('IDEMPOTENCY_KEY_REUSED');
@@ -298,7 +364,7 @@ describe('admin product use cases', () => {
 
     it('retorna technicalFailure en excepción', async () => {
       mockActorLookup.findById.mockRejectedValue(new Error('DB error'));
-      const result = await adminUpdateProduct(mockProductRepo, mockActorLookup, mockIdempotency, validCommand);
+      const result = await adminUpdateProduct(mockProductRepo, mockCategoryRepo, mockActorLookup, mockIdempotency, validCommand);
       expect(isFailure(result)).toBe(true);
       if (isFailure(result)) {
         expect(result.error.code).toBe('TECHNICAL_DEPENDENCY_FAILURE');

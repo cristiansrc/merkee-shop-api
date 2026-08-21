@@ -1,6 +1,7 @@
 import { Result, ok, fail } from '../../../../shared/domain/result';
 import { DomainError } from '../../../../shared/domain/domain-error';
 import { ProductRepositoryPort, ProductWithImages } from '../../domain/ports/product-repository.port';
+import { CategoryRepositoryPort, CategoryRecord } from '../../domain/ports/category-repository.port';
 import { ActorLookupPort } from '../../domain/ports/actor-lookup.port';
 import { CatalogIdempotencyPort } from '../../domain/ports/catalog-idempotency.port';
 import { CatalogErrors } from '../../domain/catalog-errors';
@@ -9,6 +10,8 @@ import { createHash } from 'crypto';
 export interface AdminProductView {
   readonly id: string;
   readonly categoryId: string;
+  readonly categoryName: string;
+  readonly categoryVersion: number;
   readonly name: string;
   readonly description: string;
   readonly regularPriceCop: number;
@@ -27,27 +30,46 @@ export interface AdminListProductsResult {
   readonly total: number;
 }
 
+/** Resuelve nombre/versión de categoría desde un registro (o fallback neutro). */
+function categoryRef(category: CategoryRecord | null | undefined, categoryId: string): {
+  readonly categoryName: string;
+  readonly categoryVersion: number;
+} {
+  return {
+    categoryName: category?.name ?? '',
+    categoryVersion: category?.version ?? 1,
+  };
+}
+
 export async function adminListProducts(
   productRepo: ProductRepositoryPort,
+  categoryRepo: CategoryRepositoryPort,
   page: number,
   size: number,
 ): Promise<Result<AdminListProductsResult, DomainError>> {
   try {
     const result = await productRepo.listAll(page, size);
+    const categories = await categoryRepo.listAll();
+    const categoriesById = new Map(categories.map((c) => [c.id, c]));
+
     return ok({
-      items: result.items.map((p) => ({
-        id: p.product.id,
-        categoryId: p.product.categoryId,
-        name: p.product.name,
-        description: p.product.description,
-        regularPriceCop: Number(p.product.regularPriceCop),
-        salePriceCop: Number(p.product.salePriceCop),
-        unit: p.product.unit,
-        stockOnHand: p.product.stockOnHand,
-        stockReserved: p.product.stockReserved,
-        version: p.product.version,
-        images: p.images.map((img) => ({ key: img.key, altText: img.altText, position: img.position })),
-      })),
+      items: result.items.map((p) => {
+        const category = categoriesById.get(p.product.categoryId);
+        return {
+          id: p.product.id,
+          categoryId: p.product.categoryId,
+          ...categoryRef(category, p.product.categoryId),
+          name: p.product.name,
+          description: p.product.description,
+          regularPriceCop: Number(p.product.regularPriceCop),
+          salePriceCop: Number(p.product.salePriceCop),
+          unit: p.product.unit,
+          stockOnHand: p.product.stockOnHand,
+          stockReserved: p.product.stockReserved,
+          version: p.product.version,
+          images: p.images.map((img) => ({ key: img.key, altText: img.altText, position: img.position })),
+        };
+      }),
       page: result.page,
       size: result.size,
       total: result.total,
@@ -72,6 +94,7 @@ export interface AdminCreateProductCommand {
 
 export async function adminCreateProduct(
   productRepo: ProductRepositoryPort,
+  categoryRepo: CategoryRepositoryPort,
   actorLookup: ActorLookupPort,
   idempotencyPort: CatalogIdempotencyPort,
   command: AdminCreateProductCommand,
@@ -118,9 +141,12 @@ export async function adminCreateProduct(
       images: command.images,
     });
 
+    const category = await categoryRepo.findById(command.categoryId);
+
     const response: AdminProductView = {
       id: created.product.id,
       categoryId: created.product.categoryId,
+      ...categoryRef(category, created.product.categoryId),
       name: created.product.name,
       description: created.product.description,
       regularPriceCop: Number(created.product.regularPriceCop),
@@ -161,6 +187,7 @@ export interface AdminUpdateProductCommand {
 
 export async function adminUpdateProduct(
   productRepo: ProductRepositoryPort,
+  categoryRepo: CategoryRepositoryPort,
   actorLookup: ActorLookupPort,
   idempotencyPort: CatalogIdempotencyPort,
   command: AdminUpdateProductCommand,
@@ -219,9 +246,12 @@ export async function adminUpdateProduct(
       return fail(CatalogErrors.versionMismatch());
     }
 
+    const category = await categoryRepo.findById(command.categoryId);
+
     const response: AdminProductView = {
       id: updated.product.id,
       categoryId: updated.product.categoryId,
+      ...categoryRef(category, updated.product.categoryId),
       name: updated.product.name,
       description: updated.product.description,
       regularPriceCop: Number(updated.product.regularPriceCop),
