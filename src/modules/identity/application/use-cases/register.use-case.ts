@@ -6,6 +6,7 @@ import { PasswordHasherPort } from '../../domain/ports/password-hasher.port';
 import { JwtPort } from '../../domain/ports/jwt.port';
 import { CookieTokenPort } from '../../domain/ports/cookie-token.port';
 import { ClockPort } from '../../domain/ports/clock.port';
+import { CartReservationPort } from '../../domain/ports/cart-reservation.port';
 import { emailAlreadyRegistered, technicalFailure } from '../../domain/identity-errors';
 import { SESSION_INACTIVITY_TTL_MS } from '../../domain/session.config';
 import type { SessionDto } from '../../../../contract/application/dto';
@@ -16,6 +17,8 @@ export interface RegisterCommand {
   readonly password: string;
   readonly displayName?: string;
   readonly phone?: string;
+  /** ID de sesión guest previa (si existe cookie de carrito). */
+  readonly guestSessionId?: string;
 }
 
 /** Resultado de éxito del registro. */
@@ -28,7 +31,9 @@ export interface RegisterResult {
  * Caso de uso de registro público de cliente (MSF-ID-001).
  *
  * Crea un usuario con rol `cliente`, una sesión AUTHENTICATED, un JWT
- * de acceso (≤10 min) y un refresh token opaco hashado.
+ * de acceso (≤10 min) y un refresh token opaco hashado. Si existe una sesión
+ * guest previa, transfiere su carrito a la nueva sesión antes de revocar la
+ * guest (promoción guest→cliente).
  *
  * ROP: todos los puertos devuelven `Result`; la aplicación propaga
  * el rail `Failure` sin capturar excepciones técnicas (Master Spec §ROP).
@@ -41,6 +46,7 @@ export class RegisterUseCase {
     private readonly jwt: JwtPort,
     private readonly cookieToken: CookieTokenPort,
     private readonly clock: ClockPort,
+    private readonly cartReservation: CartReservationPort,
   ) {}
 
   async execute(
@@ -84,11 +90,30 @@ export class RegisterUseCase {
       expiresAt,
     });
     if (isFailure(sessionResult)) return sessionResult;
+    const newSessionId = sessionResult.value.id;
 
-    // 5. Generar JWT de acceso
+    // 5. Promoción guest→cliente: transferir el carrito antes de revocar guest
+    if (command.guestSessionId) {
+      const guestSessionResult = await this.sessionRepo.findById(command.guestSessionId);
+      if (isFailure(guestSessionResult)) return guestSessionResult;
+      const guestSession = guestSessionResult.value;
+
+      if (guestSession && !guestSession.revokedAt) {
+        const transferResult = await this.cartReservation.transferGuestCart(
+          guestSession.id,
+          newSessionId,
+        );
+        if (isFailure(transferResult)) return transferResult;
+
+        const revokeResult = await this.sessionRepo.revoke(guestSession.id);
+        if (isFailure(revokeResult)) return revokeResult;
+      }
+    }
+
+    // 6. Generar JWT de acceso
     const jwtResult = await this.jwt.sign({
       sub: createResult.value.id,
-      session_id: sessionResult.value.id,
+      session_id: newSessionId,
       role: createResult.value.role,
     });
     if (isFailure(jwtResult)) return jwtResult;

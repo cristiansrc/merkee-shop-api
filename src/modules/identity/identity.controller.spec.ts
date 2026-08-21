@@ -839,6 +839,26 @@ describe('IdentityController (MSF-ID-003)', () => {
       );
     });
 
+    it('propaga guestSessionId desde el body guest_session_id (registro)', async () => {
+      const { controller, register } = buildController({
+        register: jest.fn().mockResolvedValue(sessionSuccess()),
+      });
+      const { res } = buildRes();
+      await controller.register(
+        {
+          display_name: 'Ada Lovelace',
+          email: 'ada@example.com',
+          password: 'CorrectP@ssw0rd!',
+          guest_session_id: '550e8400-e29b-41d4-a716-446655440000',
+        },
+        cookieRequest('/auth/register'),
+        res,
+      );
+      expect(register).toHaveBeenCalledWith(
+        expect.objectContaining({ guestSessionId: '550e8400-e29b-41d4-a716-446655440000' }),
+      );
+    });
+
     it('rechaza con 409 cuando el email ya está registrado y NO emite cookie', async () => {
       const { controller } = buildController({
         register: jest.fn().mockResolvedValue(fail(emailAlreadyRegistered())),
@@ -938,6 +958,41 @@ describe('IdentityController (MSF-ID-003)', () => {
       );
       expect(login).toHaveBeenCalledWith(
         expect.objectContaining({ guestSessionId: 'guest-session-1' }),
+      );
+    });
+
+    it('el body guest_session_id tiene prioridad sobre la cookie', async () => {
+      const { controller, login } = buildController({
+        login: jest.fn().mockResolvedValue(sessionSuccess()),
+      });
+      const { res } = buildRes();
+      await controller.login(
+        {
+          email: 'ada@example.com',
+          password: 'CorrectP@ssw0rd!',
+          guest_session_id: '550e8400-e29b-41d4-a716-446655440000',
+        },
+        cookieRequest('/auth/login', { merkee_cart_session: 'cookie-session-id' }),
+        res,
+      );
+      expect(login).toHaveBeenCalledWith(
+        expect.objectContaining({ guestSessionId: '550e8400-e29b-41d4-a716-446655440000' }),
+      );
+    });
+
+    it('limpia la cookie merkee_cart_session tras el login (promoción guest→cliente)', async () => {
+      const { controller, login } = buildController({
+        login: jest.fn().mockResolvedValue(sessionSuccess()),
+      });
+      const { res, clearCookie } = buildRes();
+      await controller.login(
+        { email: 'ada@example.com', password: 'CorrectP@ssw0rd!' },
+        cookieRequest('/auth/login', { merkee_cart_session: 'guest-session-1' }),
+        res,
+      );
+      expect(clearCookie).toHaveBeenCalledWith(
+        'merkee_cart_session',
+        expect.objectContaining({ httpOnly: true, sameSite: 'lax', path: '/' }),
       );
     });
 

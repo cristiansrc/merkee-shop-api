@@ -73,32 +73,7 @@ export class LoginUseCase {
       return fail(invalidCredentials());
     }
 
-    // 3. Manejar promoción de sesión guest si existe
-    if (command.guestSessionId) {
-      const guestSessionResult = await this.sessionRepo.findById(command.guestSessionId);
-      if (isFailure(guestSessionResult)) return guestSessionResult;
-      const guestSession = guestSessionResult.value;
-
-      if (guestSession && !guestSession.revokedAt) {
-        if (user.role === 'admin') {
-          // guest→admin: liberar reservas ACTIVE, cerrar carrito, revocar guest
-          const releaseResult = await this.cartReservation.releaseActiveReservations(
-            guestSession.id,
-          );
-          if (isFailure(releaseResult)) return releaseResult;
-
-          const closeResult = await this.cartReservation.closeCart(guestSession.id);
-          if (isFailure(closeResult)) return closeResult;
-        }
-        // guest→cliente: el carrito se conserva (la sesión guest se
-        // reemplaza por la autenticada; el módulo cart-reservation
-        // manejará la transferencia de ownership en MSF-CART-001).
-        const revokeResult = await this.sessionRepo.revoke(guestSession.id);
-        if (isFailure(revokeResult)) return revokeResult;
-      }
-    }
-
-    // 4. Crear sesión AUTHENTICATED
+    // 3. Crear sesión AUTHENTICATED
     const refreshToken = this.cookieToken.generate();
     const refreshTokenHash = this.cookieToken.hash(refreshToken);
     const now = this.clock.now();
@@ -111,11 +86,43 @@ export class LoginUseCase {
       expiresAt,
     });
     if (isFailure(sessionResult)) return sessionResult;
+    const newSessionId = sessionResult.value.id;
+
+    // 4. Manejar promoción de sesión guest si existe. La transferencia del
+    //    carrito guest→cliente ocurre ANTES de revocar la sesión guest.
+    if (command.guestSessionId) {
+      const guestSessionResult = await this.sessionRepo.findById(command.guestSessionId);
+      if (isFailure(guestSessionResult)) return guestSessionResult;
+      const guestSession = guestSessionResult.value;
+
+      if (guestSession && !guestSession.revokedAt) {
+        if (user.role === 'admin') {
+          // guest→admin: liberar reservas ACTIVE, cerrar carrito (sin carrito admin)
+          const releaseResult = await this.cartReservation.releaseActiveReservations(
+            guestSession.id,
+          );
+          if (isFailure(releaseResult)) return releaseResult;
+
+          const closeResult = await this.cartReservation.closeCart(guestSession.id);
+          if (isFailure(closeResult)) return closeResult;
+        } else {
+          // guest→cliente: transferir el carrito a la nueva sesión autenticada
+          const transferResult = await this.cartReservation.transferGuestCart(
+            guestSession.id,
+            newSessionId,
+          );
+          if (isFailure(transferResult)) return transferResult;
+        }
+
+        const revokeResult = await this.sessionRepo.revoke(guestSession.id);
+        if (isFailure(revokeResult)) return revokeResult;
+      }
+    }
 
     // 5. Generar JWT de acceso
     const jwtResult = await this.jwt.sign({
       sub: user.id,
-      session_id: sessionResult.value.id,
+      session_id: newSessionId,
       role: user.role,
     });
     if (isFailure(jwtResult)) return jwtResult;

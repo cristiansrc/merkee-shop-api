@@ -54,4 +54,17 @@ export class RealCartReservationAdapter implements CartReservationPort {
       return fail(technicalFailure());
     }
   }
+
+  async transferGuestCart(
+    guestSessionId: string,
+    targetSessionId: string,
+  ): Promise<Result<void, DomainError>> {
+    try {
+      await this.cartRepo.transferCartToSession(guestSessionId, targetSessionId);
+      return ok(undefined);
+    } catch (error) {
+      this.logger.warn(`transferGuestCart failed (code=${(error as { code?: string }).code ?? 'unknown'})`);
+      return fail(technicalFailure());
+    }
+  }
 }

@@ -32,6 +32,7 @@ function stubCartReservation(overrides?: Partial<CartReservationPort>): CartRese
   return {
     releaseActiveReservations: jest.fn().mockResolvedValue(ok(undefined as never)),
     closeCart: jest.fn().mockResolvedValue(ok(undefined as never)),
+    transferGuestCart: jest.fn().mockResolvedValue(ok(undefined as never)),
     ...overrides,
   };
 }

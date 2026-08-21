@@ -69,12 +69,26 @@ export interface RegisterRequest {
   readonly display_name: string;
   readonly email: string;
   readonly password: string;
+  /**
+   * ID de sesión de carrito de invitado (UUID) para la promoción guest→cliente.
+   * Opcional y retrocompatible: no está en el contrato OpenAPI vigente; se
+   * acepta como extensión para que clientes no-cookie puedan transferir el
+   * carrito guest al registrarse.
+   */
+  readonly guest_session_id?: string;
 }
 
 /** `LoginRequest`: autenticación con correo y contraseña. */
 export interface LoginRequest {
   readonly email: string;
   readonly password: string;
+  /**
+   * ID de sesión de carrito de invitado (UUID) para la promoción guest→cliente.
+   * Opcional y retrocompatible: no está en el contrato OpenAPI vigente; se
+   * acepta como extensión para que clientes no-cookie puedan transferir el
+   * carrito guest al iniciar sesión.
+   */
+  readonly guest_session_id?: string;
 }
 
 /** `PasswordResetRequest`: solicitud de restablecimiento de contraseña. */

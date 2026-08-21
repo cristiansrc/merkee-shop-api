@@ -94,6 +94,7 @@ function stubCartReservation(overrides?: Partial<CartReservationPort>): CartRese
   return {
     releaseActiveReservations: jest.fn().mockResolvedValue(ok(undefined)),
     closeCart: jest.fn().mockResolvedValue(ok(undefined)),
+    transferGuestCart: jest.fn().mockResolvedValue(ok(undefined)),
     ...overrides,
   };
 }
@@ -236,7 +237,7 @@ describe('LoginUseCase', () => {
   });
 
   describe('Promoción guest→cliente', () => {
-    it('revoca la sesión guest y crea sesión autenticada', async () => {
+    it('transfiere el carrito guest a la nueva sesión y revoca la guest', async () => {
       const guestSession: Session = {
         id: 'guest-session-1',
         userId: null,
@@ -249,18 +250,21 @@ describe('LoginUseCase', () => {
       };
       const findById = jest.fn().mockResolvedValue(ok(guestSession));
       const revoke = jest.fn().mockResolvedValue(ok(undefined as never));
+      const transferGuestCart = jest.fn().mockResolvedValue(ok(undefined as never));
 
       const uc = createUseCase(
 {
 
         userRepo: { findByEmail: jest.fn().mockResolvedValue(ok(existingUser)) },
         sessionRepo: { findById, revoke },
+        cartReservation: { transferGuestCart },
       });
 
       const result = await uc.execute({ ...command, guestSessionId: 'guest-session-1' });
 
       expect(isSuccess(result)).toBe(true);
       expect(findById).toHaveBeenCalledWith('guest-session-1');
+      expect(transferGuestCart).toHaveBeenCalledWith('guest-session-1', 'session-auth-1');
       expect(revoke).toHaveBeenCalledWith('guest-session-1');
     });
 
@@ -277,19 +281,21 @@ describe('LoginUseCase', () => {
       };
       const releaseActive = jest.fn().mockResolvedValue(ok(undefined as never));
       const closeCart = jest.fn().mockResolvedValue(ok(undefined as never));
+      const transferGuestCart = jest.fn().mockResolvedValue(ok(undefined as never));
 
       const uc = createUseCase(
 {
 
         userRepo: { findByEmail: jest.fn().mockResolvedValue(ok(existingUser)) },
         sessionRepo: { findById: jest.fn().mockResolvedValue(ok(guestSession)) },
-        cartReservation: { releaseActiveReservations: releaseActive, closeCart },
+        cartReservation: { releaseActiveReservations: releaseActive, closeCart, transferGuestCart },
       });
 
       await uc.execute({ ...command, guestSessionId: 'guest-session-1' });
 
       expect(releaseActive).not.toHaveBeenCalled();
       expect(closeCart).not.toHaveBeenCalled();
+      expect(transferGuestCart).toHaveBeenCalledWith('guest-session-1', 'session-auth-1');
     });
   });
 

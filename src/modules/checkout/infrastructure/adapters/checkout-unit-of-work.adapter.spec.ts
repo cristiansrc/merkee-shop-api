@@ -130,6 +130,7 @@ describe('PrismaCheckoutUnitOfWorkAdapter', () => {
             create: jest.fn().mockResolvedValue({
               id: 'ord-1',
               orderNumber: 'ORD-001',
+              createdAt: new Date('2026-01-01T00:00:00.000Z'),
               items: [],
             }),
           },
@@ -155,6 +156,9 @@ describe('PrismaCheckoutUnitOfWorkAdapter', () => {
           deliveryLine1: 'Calle 1',
           deliveryCity: 'Bogotá',
           deliveryPhone: '300',
+          provider: 'WOMPI',
+          providerReference: 'wompi-tx-1',
+          paymentIdempotencyKey: '550e8400-e29b-41d4-a716-446655440000',
           items: [
             {
               productId: 'p1',
@@ -200,6 +204,9 @@ describe('PrismaCheckoutUnitOfWorkAdapter', () => {
             deliveryLine1: 'Calle 1',
             deliveryCity: 'Bogotá',
             deliveryPhone: '300',
+            provider: 'WOMPI',
+            providerReference: null,
+            paymentIdempotencyKey: '550e8400-e29b-41d4-a716-446655440000',
             items: [],
           }),
         ).rejects.toThrow('ORDER_ALREADY_EXISTS');

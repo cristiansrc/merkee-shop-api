@@ -18,4 +18,12 @@ export interface CartReservationPort {
   releaseActiveReservations(sessionId: string): Promise<Result<void, DomainError>>;
   /** Cierra el carrito de la sesión guest. */
   closeCart(sessionId: string): Promise<Result<void, DomainError>>;
+  /**
+   * Transfiere el carrito de la sesión guest a la sesión autenticada de un
+   * cliente (promoción guest→cliente), antes de revocar la sesión guest.
+   */
+  transferGuestCart(
+    guestSessionId: string,
+    targetSessionId: string,
+  ): Promise<Result<void, DomainError>>;
 }

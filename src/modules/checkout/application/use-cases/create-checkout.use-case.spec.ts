@@ -1,12 +1,43 @@
 import { CreateCheckoutUseCaseImpl, CreateCheckoutCommand } from './create-checkout.use-case';
 import { CartRepositoryPort, CartWithItemsRecord } from '../../../cart-reservation/domain/ports/cart-repository.port';
 import { SessionLookupPort } from '../../../cart-reservation/domain/ports/session-lookup.port';
+import { CartIdempotencyPort } from '../../../cart-reservation/domain/ports/cart-idempotency.port';
 import { CartSession, CartUser } from '../../../cart-reservation/domain/models';
 import { CheckoutProductLookupPort, ProductSnapshot } from '../../domain/ports/checkout-product-lookup.port';
 import { CheckoutUnitOfWorkPort, CheckoutTransactionContext } from '../../domain/ports/checkout-unit-of-work.port';
 import { CheckoutErrors } from '../../domain/checkout-errors';
 import { DomainErrorCode } from '../../../../shared/domain/domain-error';
 import { Result, ok, fail } from '../../../../shared/domain/result';
+import { PaymentProviderSelector } from '../../../payments/domain/ports/payment-provider-selector';
+import { PaymentProviderPort } from '../../../payments/domain/ports/payment-provider.port';
+
+/** Construye un selector de proveedor mock que devuelve una URL de checkout. */
+function makeProviderSelector(overrides?: {
+  createPaymentResult?: Partial<{
+    providerPaymentId: string;
+    status: 'PENDING' | 'APPROVED' | 'DECLINED';
+    checkoutUrl: string;
+  }>;
+  createPaymentError?: Error;
+}): PaymentProviderSelector {
+  const provider: PaymentProviderPort = {
+    provider: 'WOMPI',
+    createPayment: jest.fn().mockImplementation(() => {
+      if (overrides?.createPaymentError) {
+        return Promise.reject(overrides.createPaymentError);
+      }
+      return Promise.resolve({
+        providerPaymentId: 'wompi-tx-1',
+        status: 'PENDING' as const,
+        checkoutUrl: 'https://checkout.wompi.co/p/wompi-tx-1',
+        ...(overrides?.createPaymentResult ?? {}),
+      });
+    }),
+    queryPaymentStatus: jest.fn(),
+    refund: jest.fn(),
+  };
+  return { resolve: jest.fn().mockReturnValue(provider) } as unknown as PaymentProviderSelector;
+}
 
 describe('CreateCheckoutUseCase', () => {
   let useCase: CreateCheckoutUseCaseImpl;
@@ -14,6 +45,8 @@ describe('CreateCheckoutUseCase', () => {
   let sessionLookup: jest.Mocked<SessionLookupPort>;
   let productLookup: jest.Mocked<CheckoutProductLookupPort>;
   let unitOfWork: jest.Mocked<CheckoutUnitOfWorkPort>;
+  let providerSelector: PaymentProviderSelector;
+  let idempotency: jest.Mocked<CartIdempotencyPort>;
 
   const mockSession: CartSession = {
     id: 'session-1',
@@ -94,6 +127,70 @@ describe('CreateCheckoutUseCase', () => {
     ],
   };
 
+  function makeCommand(overrides?: Partial<CreateCheckoutCommand>): CreateCheckoutCommand {
+    return {
+      sessionId: 'session-1',
+      userId: 'user-1',
+      deliveryAddress: {
+        recipientName: 'Juan Pérez',
+        line1: 'Calle 123',
+        city: 'Bogotá',
+        phone: '3001234567',
+      },
+      paymentProvider: 'WOMPI',
+      idempotencyKey: '550e8400-e29b-41d4-a716-446655440000',
+      canonicalBody: '{"delivery_address":{"recipient_name":"Juan Pérez","line1":"Calle 123","city":"Bogotá","phone":"3001234567"},"payment_provider":"WOMPI"}',
+      ...overrides,
+    };
+  }
+
+  /** Monta un ctx transaccional mock que captura los params de creación de orden. */
+  function mockUnitOfWork(overrides?: {
+    orderCreator?: (params: any) => any;
+    existingRecord?: { bodyHash: string; responseJson: unknown } | null;
+  }): { getCapturedParams: () => any; orderCreated: () => boolean } {
+    let capturedParams: any;
+    let orderCreated = false;
+    const defaultOrderResult = {
+      orderId: 'order-1',
+      orderNumber: 'ORD-001',
+      paymentId: 'payment-1',
+      createdAt: '2026-01-01T00:00:00.000Z',
+    };
+
+    unitOfWork.run.mockImplementation(async (work: any) => {
+      const ctx: CheckoutTransactionContext = {
+        cartWithItems: mockCartWithItems,
+        reservationConverter: { convertActiveToCheckoutPending: jest.fn() },
+        orderCreator: {
+          createOrderAndPayment: jest.fn().mockImplementation((params) => {
+            capturedParams = params;
+            if (orderCreated) {
+              return Promise.reject(new Error('ORDER_ALREADY_EXISTS'));
+            }
+            orderCreated = true;
+            return Promise.resolve(overrides?.orderCreator ? overrides.orderCreator(params) : defaultOrderResult);
+          }),
+        },
+        idempotency: {
+          findForUpdate: jest.fn().mockResolvedValue(overrides?.existingRecord ?? null),
+          save: jest.fn(),
+        },
+      };
+      try {
+        return await work(ctx);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message === 'ORDER_ALREADY_EXISTS') {
+          return fail(CheckoutErrors.orderAlreadyExists());
+        }
+        return fail(CheckoutErrors.technicalFailure());
+      }
+    });
+
+    return { getCapturedParams: () => capturedParams, orderCreated: () => orderCreated };
+  }
+
   beforeEach(() => {
     cartRepo = {
       findCartWithItems: jest.fn(),
@@ -106,6 +203,7 @@ describe('CreateCheckoutUseCase', () => {
       updateCartItemQuantity: jest.fn(),
       deleteCartItem: jest.fn(),
       closeCart: jest.fn(),
+      transferCartToSession: jest.fn(),
       touchSession: jest.fn(),
     };
 
@@ -122,127 +220,70 @@ describe('CreateCheckoutUseCase', () => {
       run: jest.fn(),
     };
 
+    providerSelector = makeProviderSelector();
+
+    idempotency = {
+      find: jest.fn().mockResolvedValue(null),
+      findForUpdate: jest.fn().mockResolvedValue(null),
+      save: jest.fn(),
+    };
+
     useCase = new CreateCheckoutUseCaseImpl(
       cartRepo,
       sessionLookup,
       productLookup,
       unitOfWork,
+      providerSelector,
+      idempotency,
+    );
+
+    sessionLookup.findById.mockResolvedValue(mockSession);
+    sessionLookup.findUserById.mockResolvedValue(mockUser);
+    cartRepo.findCartWithItems.mockResolvedValue(mockCartWithItems);
+    productLookup.findByIds.mockResolvedValue(
+      new Map([['product-1', mockProduct1], ['product-2', mockProduct2]]),
     );
   });
 
   describe('IVA calculation (AC-08 / ADR-009)', () => {
     it('calculates IVA correctly with floor((subtotal*19+50)/100)', async () => {
-      // subtotal = (4500*2) + (3000*3) = 9000 + 9000 = 18000
-      // IVA = floor((18000*19+50)/100) = floor(342050/100) = floor(3420.5) = 3420
-      // delivery = 5000
-      // total = 18000 + 5000 + 3420 = 26420
+      const { getCapturedParams } = mockUnitOfWork();
 
-      sessionLookup.findById.mockResolvedValue(mockSession);
-      sessionLookup.findUserById.mockResolvedValue(mockUser);
-      cartRepo.findCartWithItems.mockResolvedValue(mockCartWithItems);
-      productLookup.findByIds.mockResolvedValue(
-        new Map([['product-1', mockProduct1], ['product-2', mockProduct2]]),
-      );
-
-      let capturedParams: any;
-      unitOfWork.run.mockImplementation(async (work: any) => {
-        const ctx: CheckoutTransactionContext = {
-          cartWithItems: mockCartWithItems,
-          reservationConverter: { convertActiveToCheckoutPending: jest.fn() },
-          orderCreator: {
-            createOrderAndPayment: jest.fn().mockImplementation((params) => {
-              capturedParams = params;
-              return Promise.resolve({
-                orderId: 'order-1',
-                orderNumber: 'ORD-001',
-                paymentId: 'payment-1',
-              });
-            }),
-          },
-          idempotency: {
-            findForUpdate: jest.fn().mockResolvedValue(null),
-            save: jest.fn(),
-          },
-        };
-        return work(ctx);
-      });
-
-      const command: CreateCheckoutCommand = {
-        sessionId: 'session-1',
-        userId: 'user-1',
-        deliveryAddress: {
-          recipientName: 'Juan Pérez',
-          line1: 'Calle 123',
-          city: 'Bogotá',
-          phone: '3001234567',
-        },
-        idempotencyKey: '550e8400-e29b-41d4-a716-446655440000',
-        canonicalBody: '{"delivery_address":{"recipient_name":"Juan Pérez","line1":"Calle 123","city":"Bogotá","phone":"3001234567"}}',
-      };
-
-      const result = await useCase.execute(command);
+      const result = await useCase.execute(makeCommand());
 
       expect(result.ok).toBe(true);
       if (result.ok) {
-        expect(result.value.itemsSubtotalCop).toBe(18000n);
-        expect(result.value.ivaCop).toBe(3420n);
-        expect(result.value.deliveryFeeCop).toBe(5000n);
-        expect(result.value.totalCop).toBe(26420n);
+        expect(result.value.itemsSubtotalCop).toBe(18000);
+        expect(result.value.ivaCop).toBe(3420);
+        expect(result.value.deliveryFeeCop).toBe(5000);
+        expect(result.value.totalCop).toBe(26420);
+        expect(result.value.providerCheckoutUrl).toBe('https://checkout.wompi.co/p/wompi-tx-1');
       }
 
+      const capturedParams = getCapturedParams();
       expect(capturedParams.itemsSubtotalCop).toBe(18000n);
       expect(capturedParams.ivaCop).toBe(3420n);
       expect(capturedParams.deliveryFeeCop).toBe(5000n);
       expect(capturedParams.totalCop).toBe(26420n);
       expect(capturedParams.taxRateBasisPoints).toBe(1900);
+      expect(capturedParams.provider).toBe('WOMPI');
     });
 
     it('recalculates prices from server, not trusting client', async () => {
-      // Client sends different prices, server recalculates
-      sessionLookup.findById.mockResolvedValue(mockSession);
-      sessionLookup.findUserById.mockResolvedValue(mockUser);
-      cartRepo.findCartWithItems.mockResolvedValue(mockCartWithItems);
-      productLookup.findByIds.mockResolvedValue(
-        new Map([['product-1', mockProduct1], ['product-2', mockProduct2]]),
-      );
-
       let capturedItems: any[] = [];
-      unitOfWork.run.mockImplementation(async (work: any) => {
-        const ctx: CheckoutTransactionContext = {
-          cartWithItems: mockCartWithItems,
-          reservationConverter: { convertActiveToCheckoutPending: jest.fn() },
-          orderCreator: {
-            createOrderAndPayment: jest.fn().mockImplementation((params) => {
-              capturedItems = params.items;
-              return Promise.resolve({
-                orderId: 'order-1',
-                orderNumber: 'ORD-001',
-                paymentId: 'payment-1',
-              });
-            }),
-          },
-          idempotency: {
-            findForUpdate: jest.fn().mockResolvedValue(null),
-            save: jest.fn(),
-          },
-        };
-        return work(ctx);
+      mockUnitOfWork({
+        orderCreator: (params) => {
+          capturedItems = params.items;
+          return {
+            orderId: 'order-1',
+            orderNumber: 'ORD-001',
+            paymentId: 'payment-1',
+            createdAt: '2026-01-01T00:00:00.000Z',
+          };
+        },
       });
 
-      const command: CreateCheckoutCommand = {
-        sessionId: 'session-1',
-        userId: 'user-1',
-        deliveryAddress: {
-          recipientName: 'Juan Pérez',
-          line1: 'Calle 123',
-          city: 'Bogotá',
-          phone: '3001234567',
-        },
-        idempotencyKey: '550e8400-e29b-41d4-a716-446655440000',
-        canonicalBody: '{}',
-      };
-
-      await useCase.execute(command);
+      await useCase.execute(makeCommand({ canonicalBody: '{}' }));
 
       // Verify server recalculated prices (salePrice for product-1, regularPrice for product-2)
       expect(capturedItems[0].unitPriceCop).toBe(4500n); // salePrice
@@ -252,27 +293,12 @@ describe('CreateCheckoutUseCase', () => {
 
   describe('422 states and reservations', () => {
     it('returns CHECKOUT_NOT_ALLOWED for empty cart', async () => {
-      sessionLookup.findById.mockResolvedValue(mockSession);
-      sessionLookup.findUserById.mockResolvedValue(mockUser);
       cartRepo.findCartWithItems.mockResolvedValue({
         cart: mockCartWithItems.cart,
         items: [],
       });
 
-      const command: CreateCheckoutCommand = {
-        sessionId: 'session-1',
-        userId: 'user-1',
-        deliveryAddress: {
-          recipientName: 'Juan Pérez',
-          line1: 'Calle 123',
-          city: 'Bogotá',
-          phone: '3001234567',
-        },
-        idempotencyKey: '550e8400-e29b-41d4-a716-446655440000',
-        canonicalBody: '{}',
-      };
-
-      const result = await useCase.execute(command);
+      const result = await useCase.execute(makeCommand());
 
       expect(result.ok).toBe(false);
       if (!result.ok) {
@@ -294,24 +320,9 @@ describe('CreateCheckoutUseCase', () => {
         ],
       };
 
-      sessionLookup.findById.mockResolvedValue(mockSession);
-      sessionLookup.findUserById.mockResolvedValue(mockUser);
       cartRepo.findCartWithItems.mockResolvedValue(cartWithExpiredReservation);
 
-      const command: CreateCheckoutCommand = {
-        sessionId: 'session-1',
-        userId: 'user-1',
-        deliveryAddress: {
-          recipientName: 'Juan Pérez',
-          line1: 'Calle 123',
-          city: 'Bogotá',
-          phone: '3001234567',
-        },
-        idempotencyKey: '550e8400-e29b-41d4-a716-446655440000',
-        canonicalBody: '{}',
-      };
-
-      const result = await useCase.execute(command);
+      const result = await useCase.execute(makeCommand());
 
       expect(result.ok).toBe(false);
       if (!result.ok) {
@@ -330,24 +341,9 @@ describe('CreateCheckoutUseCase', () => {
         ],
       };
 
-      sessionLookup.findById.mockResolvedValue(mockSession);
-      sessionLookup.findUserById.mockResolvedValue(mockUser);
       cartRepo.findCartWithItems.mockResolvedValue(cartWithoutReservation);
 
-      const command: CreateCheckoutCommand = {
-        sessionId: 'session-1',
-        userId: 'user-1',
-        deliveryAddress: {
-          recipientName: 'Juan Pérez',
-          line1: 'Calle 123',
-          city: 'Bogotá',
-          phone: '3001234567',
-        },
-        idempotencyKey: '550e8400-e29b-41d4-a716-446655440000',
-        canonicalBody: '{}',
-      };
-
-      const result = await useCase.execute(command);
+      const result = await useCase.execute(makeCommand());
 
       expect(result.ok).toBe(false);
       if (!result.ok) {
@@ -362,23 +358,19 @@ describe('CreateCheckoutUseCase', () => {
         mustChangePassword: false,
       };
 
-      sessionLookup.findById.mockResolvedValue(mockSession);
       sessionLookup.findUserById.mockResolvedValue(adminUser);
 
-      const command: CreateCheckoutCommand = {
-        sessionId: 'session-1',
-        userId: 'admin-1',
-        deliveryAddress: {
-          recipientName: 'Admin',
-          line1: 'Calle 456',
-          city: 'Bogotá',
-          phone: '3009876543',
-        },
-        idempotencyKey: '550e8400-e29b-41d4-a716-446655440000',
-        canonicalBody: '{}',
-      };
-
-      const result = await useCase.execute(command);
+      const result = await useCase.execute(
+        makeCommand({
+          userId: 'admin-1',
+          deliveryAddress: {
+            recipientName: 'Admin',
+            line1: 'Calle 456',
+            city: 'Bogotá',
+            phone: '3009876543',
+          },
+        }),
+      );
 
       expect(result.ok).toBe(false);
       if (!result.ok) {
@@ -389,20 +381,7 @@ describe('CreateCheckoutUseCase', () => {
     it('returns SESSION_EXPIRED for expired session', async () => {
       sessionLookup.findById.mockResolvedValue(null);
 
-      const command: CreateCheckoutCommand = {
-        sessionId: 'session-1',
-        userId: 'user-1',
-        deliveryAddress: {
-          recipientName: 'Juan Pérez',
-          line1: 'Calle 123',
-          city: 'Bogotá',
-          phone: '3001234567',
-        },
-        idempotencyKey: '550e8400-e29b-41d4-a716-446655440000',
-        canonicalBody: '{}',
-      };
-
-      const result = await useCase.execute(command);
+      const result = await useCase.execute(makeCommand());
 
       expect(result.ok).toBe(false);
       if (!result.ok) {
@@ -418,90 +397,87 @@ describe('CreateCheckoutUseCase', () => {
 
       sessionLookup.findById.mockResolvedValue(revokedSession);
 
-      const command: CreateCheckoutCommand = {
-        sessionId: 'session-1',
-        userId: 'user-1',
-        deliveryAddress: {
-          recipientName: 'Juan Pérez',
-          line1: 'Calle 123',
-          city: 'Bogotá',
-          phone: '3001234567',
-        },
-        idempotencyKey: '550e8400-e29b-41d4-a716-446655440000',
-        canonicalBody: '{}',
-      };
-
-      const result = await useCase.execute(command);
+      const result = await useCase.execute(makeCommand());
 
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.code).toBe(DomainErrorCode.SESSION_EXPIRED);
       }
     });
+
+    it('returns RESOURCE_NOT_FOUND when a product no longer exists', async () => {
+      productLookup.findByIds.mockResolvedValue(
+        new Map([['product-1', mockProduct1]]), // product-2 missing
+      );
+
+      const result = await useCase.execute(makeCommand());
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(DomainErrorCode.RESOURCE_NOT_FOUND);
+      }
+    });
+  });
+
+  describe('Proveedor de pago', () => {
+    it('llama al proveedor y devuelve providerCheckoutUrl', async () => {
+      mockUnitOfWork();
+      const result = await useCase.execute(makeCommand());
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.providerCheckoutUrl).toBe('https://checkout.wompi.co/p/wompi-tx-1');
+        expect(result.value.providerReference).toBe('wompi-tx-1');
+      }
+    });
+
+    it('resuelve el proveedor según payment_provider (MERCADO_PAGO)', async () => {
+      const mpProvider: PaymentProviderPort = {
+        provider: 'MERCADO_PAGO',
+        createPayment: jest.fn().mockResolvedValue({
+          providerPaymentId: 'mp-pay-1',
+          status: 'PENDING',
+          checkoutUrl: 'https://www.mercadopago.com.co/checkout/v1/redirect?pref_id=1',
+        }),
+        queryPaymentStatus: jest.fn(),
+        refund: jest.fn(),
+      };
+      providerSelector = { resolve: jest.fn().mockReturnValue(mpProvider) } as unknown as PaymentProviderSelector;
+      useCase = new CreateCheckoutUseCaseImpl(cartRepo, sessionLookup, productLookup, unitOfWork, providerSelector, idempotency);
+
+      mockUnitOfWork();
+      const result = await useCase.execute(makeCommand({ paymentProvider: 'MERCADO_PAGO' }));
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.paymentProvider).toBe('MERCADO_PAGO');
+        expect(result.value.providerCheckoutUrl).toContain('mercadopago');
+      }
+    });
+
+    it('returns TECHNICAL_DEPENDENCY_FAILURE cuando el proveedor falla (sin estado parcial)', async () => {
+      providerSelector = makeProviderSelector({ createPaymentError: new Error('network') });
+      useCase = new CreateCheckoutUseCaseImpl(cartRepo, sessionLookup, productLookup, unitOfWork, providerSelector, idempotency);
+
+      const result = await useCase.execute(makeCommand());
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(DomainErrorCode.TECHNICAL_DEPENDENCY_FAILURE);
+      }
+      // La transacción nunca se ejecutó: no hay orden/pago/reservas convertidas
+      expect(unitOfWork.run).not.toHaveBeenCalled();
+    });
   });
 
   describe('Concurrent checkout', () => {
     it('only one checkout creates order/payment', async () => {
-      // Simulate DB-level uniqueness: track if order was already created
-      let orderCreated = false;
-
-      unitOfWork.run.mockImplementation(async (work: any) => {
-        const ctx: CheckoutTransactionContext = {
-          cartWithItems: mockCartWithItems,
-          reservationConverter: { convertActiveToCheckoutPending: jest.fn() },
-          orderCreator: {
-            createOrderAndPayment: jest.fn().mockImplementation(() => {
-              if (orderCreated) {
-                throw new Error('ORDER_ALREADY_EXISTS');
-              }
-              orderCreated = true;
-              return Promise.resolve({
-                orderId: 'order-1',
-                orderNumber: 'ORD-001',
-                paymentId: 'payment-1',
-              });
-            }),
-          },
-          idempotency: {
-            findForUpdate: jest.fn().mockResolvedValue(null),
-            save: jest.fn(),
-          },
-        };
-        try {
-          return await work(ctx);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (message === 'ORDER_ALREADY_EXISTS') {
-            return fail(CheckoutErrors.orderAlreadyExists());
-          }
-          return fail(CheckoutErrors.technicalFailure());
-        }
-      });
-
-      sessionLookup.findById.mockResolvedValue(mockSession);
-      sessionLookup.findUserById.mockResolvedValue(mockUser);
-      cartRepo.findCartWithItems.mockResolvedValue(mockCartWithItems);
-      productLookup.findByIds.mockResolvedValue(
-        new Map([['product-1', mockProduct1], ['product-2', mockProduct2]]),
-      );
-
-      const command: CreateCheckoutCommand = {
-        sessionId: 'session-1',
-        userId: 'user-1',
-        deliveryAddress: {
-          recipientName: 'Juan Pérez',
-          line1: 'Calle 123',
-          city: 'Bogotá',
-          phone: '3001234567',
-        },
-        idempotencyKey: '550e8400-e29b-41d4-a716-446655440000',
-        canonicalBody: '{}',
-      };
+      mockUnitOfWork();
 
       // Simulate concurrent checkouts
       const [result1, result2] = await Promise.all([
-        useCase.execute(command),
-        useCase.execute({ ...command, idempotencyKey: '660e8400-e29b-41d4-a716-446655440001' }),
+        useCase.execute(makeCommand()),
+        useCase.execute(makeCommand({ idempotencyKey: '660e8400-e29b-41d4-a716-446655440001' })),
       ]);
 
       // Only one should succeed
@@ -510,10 +486,102 @@ describe('CreateCheckoutUseCase', () => {
     });
   });
 
+  describe('Fallback guest→cliente (transferencia de carrito)', () => {
+    const guestSession: CartSession = {
+      id: 'guest-session-1',
+      userId: null,
+      sessionKind: 'GUEST',
+      expiresAt: new Date(Date.now() + 600000),
+      lastActivityAt: new Date(),
+      revokedAt: null,
+    };
+
+    it('transfiere el carrito guest cuando la sesión autenticada no tiene carrito', async () => {
+      const guestCartWithItems: CartWithItemsRecord = {
+        ...mockCartWithItems,
+        cart: { ...mockCartWithItems.cart, id: 'cart-guest', sessionId: 'guest-session-1' },
+      };
+
+      sessionLookup.findById.mockImplementation((sid) =>
+        sid === 'session-1'
+          ? Promise.resolve(mockSession)
+          : Promise.resolve(guestSession),
+      );
+
+      let transferred = false;
+      cartRepo.findCartWithItems.mockImplementation((sid) => {
+        if (sid === 'guest-session-1') return Promise.resolve(guestCartWithItems);
+        return Promise.resolve(transferred ? mockCartWithItems : null);
+      });
+      cartRepo.transferCartToSession.mockImplementation(async () => {
+        transferred = true;
+      });
+
+      mockUnitOfWork();
+
+      const result = await useCase.execute(makeCommand({ guestSessionId: 'guest-session-1' }));
+
+      expect(cartRepo.transferCartToSession).toHaveBeenCalledWith(
+        'guest-session-1',
+        'session-1',
+      );
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.orderId).toBe('order-1');
+      }
+    });
+
+    it('no transfiere si la sesión guest no existe o está revocada', async () => {
+      sessionLookup.findById.mockImplementation((sid) =>
+        sid === 'session-1'
+          ? Promise.resolve(mockSession)
+          : Promise.resolve(null),
+      );
+      cartRepo.findCartWithItems.mockResolvedValue(null);
+
+      const result = await useCase.execute(makeCommand({ guestSessionId: 'guest-session-1' }));
+
+      expect(cartRepo.transferCartToSession).not.toHaveBeenCalled();
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(DomainErrorCode.CHECKOUT_NOT_ALLOWED);
+      }
+    });
+
+    it('no transfiere si la sesión guest está expirada', async () => {
+      sessionLookup.findById.mockImplementation((sid) =>
+        sid === 'session-1'
+          ? Promise.resolve(mockSession)
+          : Promise.resolve({ ...guestSession, expiresAt: new Date(Date.now() - 1) }),
+      );
+      cartRepo.findCartWithItems.mockResolvedValue(null);
+
+      const result = await useCase.execute(makeCommand({ guestSessionId: 'guest-session-1' }));
+
+      expect(cartRepo.transferCartToSession).not.toHaveBeenCalled();
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(DomainErrorCode.CHECKOUT_NOT_ALLOWED);
+      }
+    });
+
+    it('devuelve CHECKOUT_NOT_ALLOWED (422) y no SESSION_EXPIRED cuando no hay carrito', async () => {
+      cartRepo.findCartWithItems.mockResolvedValue(null);
+      sessionLookup.findById.mockResolvedValue(mockSession);
+
+      const result = await useCase.execute(makeCommand());
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(DomainErrorCode.CHECKOUT_NOT_ALLOWED);
+        expect(result.error.code).not.toBe(DomainErrorCode.SESSION_EXPIRED);
+      }
+    });
+  });
+
   describe('Idempotency', () => {
     it('returns same result on replay with same idempotency key', async () => {
-      const canonicalBody = '{"delivery_address":{"recipient_name":"Juan Pérez"}}';
-      // Compute the hash the same way the use case does
+      const canonicalBody = makeCommand().canonicalBody;
       const { createHash } = await import('crypto');
       const bodyHash = createHash('sha256').update(canonicalBody).digest('hex');
 
@@ -523,53 +591,33 @@ describe('CreateCheckoutUseCase', () => {
           orderId: 'order-1',
           orderNumber: 'ORD-001',
           paymentId: 'payment-1',
-          itemsSubtotalCop: 18000n,
-          deliveryFeeCop: 5000n,
-          ivaCop: 3420n,
-          totalCop: 26420n,
+          itemsSubtotalCop: 18000,
+          deliveryFeeCop: 5000,
+          ivaCop: 3420,
+          taxRateBasisPoints: 1900,
+          totalCop: 26420,
+          items: [],
+          delivery: {
+            recipientName: 'Juan Pérez',
+            line1: 'Calle 123',
+            city: 'Bogotá',
+            phone: '3001234567',
+          },
+          paymentProvider: 'WOMPI',
+          providerReference: 'wompi-tx-1',
+          providerCheckoutUrl: 'https://checkout.wompi.co/p/wompi-tx-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
         },
       };
 
-      sessionLookup.findById.mockResolvedValue(mockSession);
-      sessionLookup.findUserById.mockResolvedValue(mockUser);
-      cartRepo.findCartWithItems.mockResolvedValue(mockCartWithItems);
-      productLookup.findByIds.mockResolvedValue(
-        new Map([['product-1', mockProduct1], ['product-2', mockProduct2]]),
-      );
+      mockUnitOfWork({ existingRecord });
 
-      unitOfWork.run.mockImplementation(async (work: any) => {
-        const ctx: CheckoutTransactionContext = {
-          cartWithItems: mockCartWithItems,
-          reservationConverter: { convertActiveToCheckoutPending: jest.fn() },
-          orderCreator: {
-            createOrderAndPayment: jest.fn(),
-          },
-          idempotency: {
-            findForUpdate: jest.fn().mockResolvedValue(existingRecord),
-            save: jest.fn(),
-          },
-        };
-        return work(ctx);
-      });
-
-      const command: CreateCheckoutCommand = {
-        sessionId: 'session-1',
-        userId: 'user-1',
-        deliveryAddress: {
-          recipientName: 'Juan Pérez',
-          line1: 'Calle 123',
-          city: 'Bogotá',
-          phone: '3001234567',
-        },
-        idempotencyKey: '550e8400-e29b-41d4-a716-446655440000',
-        canonicalBody,
-      };
-
-      const result = await useCase.execute(command);
+      const result = await useCase.execute(makeCommand());
 
       expect(result.ok).toBe(true);
       if (result.ok) {
         expect(result.value.orderId).toBe('order-1');
+        expect(result.value.providerCheckoutUrl).toBe('https://checkout.wompi.co/p/wompi-tx-1');
       }
     });
 
@@ -579,43 +627,93 @@ describe('CreateCheckoutUseCase', () => {
         responseJson: {},
       };
 
-      sessionLookup.findById.mockResolvedValue(mockSession);
-      sessionLookup.findUserById.mockResolvedValue(mockUser);
-      cartRepo.findCartWithItems.mockResolvedValue(mockCartWithItems);
-      productLookup.findByIds.mockResolvedValue(
-        new Map([['product-1', mockProduct1], ['product-2', mockProduct2]]),
+      mockUnitOfWork({ existingRecord });
+
+      const result = await useCase.execute(
+        makeCommand({ canonicalBody: '{"delivery_address":{"recipient_name":"Different"}}' }),
       );
 
-      unitOfWork.run.mockImplementation(async (work: any) => {
-        const ctx: CheckoutTransactionContext = {
-          cartWithItems: mockCartWithItems,
-          reservationConverter: { convertActiveToCheckoutPending: jest.fn() },
-          orderCreator: {
-            createOrderAndPayment: jest.fn(),
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(DomainErrorCode.IDEMPOTENCY_KEY_REUSED);
+      }
+    });
+
+    it('no invoca al proveedor en replay idempotente (pre-check sin pago externo duplicado)', async () => {
+      const canonicalBody = makeCommand().canonicalBody;
+      const { createHash } = await import('crypto');
+      const bodyHash = createHash('sha256').update(canonicalBody).digest('hex');
+
+      idempotency.find.mockResolvedValue({
+        id: 'rec-1',
+        scope: 'checkout:user-1',
+        idempotencyKey: makeCommand().idempotencyKey,
+        bodyHash,
+        responseJson: {
+          orderId: 'order-1',
+          orderNumber: 'ORD-001',
+          paymentId: 'payment-1',
+          itemsSubtotalCop: 18000,
+          deliveryFeeCop: 5000,
+          ivaCop: 3420,
+          taxRateBasisPoints: 1900,
+          totalCop: 26420,
+          items: [],
+          delivery: {
+            recipientName: 'Juan Pérez',
+            line1: 'Calle 123',
+            city: 'Bogotá',
+            phone: '3001234567',
           },
-          idempotency: {
-            findForUpdate: jest.fn().mockResolvedValue(existingRecord),
-            save: jest.fn(),
-          },
-        };
-        return work(ctx);
+          paymentProvider: 'WOMPI',
+          providerReference: 'wompi-tx-1',
+          providerCheckoutUrl: 'https://checkout.wompi.co/p/wompi-tx-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
       });
 
-      const command: CreateCheckoutCommand = {
-        sessionId: 'session-1',
-        userId: 'user-1',
-        deliveryAddress: {
-          recipientName: 'Juan Pérez',
-          line1: 'Calle 123',
-          city: 'Bogotá',
-          phone: '3001234567',
-        },
-        idempotencyKey: '550e8400-e29b-41d4-a716-446655440000',
-        canonicalBody: '{"delivery_address":{"recipient_name":"Different"}}',
+      const createPayment = jest.fn();
+      const provider: PaymentProviderPort = {
+        provider: 'WOMPI',
+        createPayment,
+        queryPaymentStatus: jest.fn(),
+        refund: jest.fn(),
       };
+      providerSelector = { resolve: jest.fn().mockReturnValue(provider) } as unknown as PaymentProviderSelector;
+      useCase = new CreateCheckoutUseCaseImpl(cartRepo, sessionLookup, productLookup, unitOfWork, providerSelector, idempotency);
 
-      const result = await useCase.execute(command);
+      const result = await useCase.execute(makeCommand());
 
+      expect(createPayment).not.toHaveBeenCalled();
+      expect(unitOfWork.run).not.toHaveBeenCalled();
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.orderId).toBe('order-1');
+      }
+    });
+
+    it('devuelve IDEMPOTENCY_KEY_REUSED en el pre-check si el body diverge', async () => {
+      idempotency.find.mockResolvedValue({
+        id: 'rec-1',
+        scope: 'checkout:user-1',
+        idempotencyKey: makeCommand().idempotencyKey,
+        bodyHash: 'different-hash',
+        responseJson: {},
+      });
+
+      const createPayment = jest.fn();
+      const provider: PaymentProviderPort = {
+        provider: 'WOMPI',
+        createPayment,
+        queryPaymentStatus: jest.fn(),
+        refund: jest.fn(),
+      };
+      providerSelector = { resolve: jest.fn().mockReturnValue(provider) } as unknown as PaymentProviderSelector;
+      useCase = new CreateCheckoutUseCaseImpl(cartRepo, sessionLookup, productLookup, unitOfWork, providerSelector, idempotency);
+
+      const result = await useCase.execute(makeCommand());
+
+      expect(createPayment).not.toHaveBeenCalled();
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.code).toBe(DomainErrorCode.IDEMPOTENCY_KEY_REUSED);

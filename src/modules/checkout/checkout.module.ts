@@ -12,8 +12,12 @@ import { CheckoutProductLookupPort } from './domain/ports/checkout-product-looku
 import { CartRepositoryPort } from '../cart-reservation/domain/ports/cart-repository.port';
 import { StockReservationPort } from '../cart-reservation/domain/ports/stock-reservation.port';
 import { SessionLookupPort } from '../cart-reservation/domain/ports/session-lookup.port';
+import { CartIdempotencyPort } from '../cart-reservation/domain/ports/cart-idempotency.port';
 import { CART_TOKENS } from '../cart-reservation/cart-reservation.tokens';
 import { CartReservationModule } from '../cart-reservation/cart-reservation.module';
+import { PaymentsModule } from '../payments/payments.module';
+import { PAYMENTS_TOKENS } from '../payments/payments.tokens';
+import { PaymentProviderSelector } from '../payments/domain/ports/payment-provider-selector';
 
 // ---------------------------------------------------------------------------
 // Providers de adapters de salida (puertos → Prisma)
@@ -45,13 +49,24 @@ const createCheckoutUseCaseProvider: Provider = {
     sessionLookup: SessionLookupPort,
     productLookup: CheckoutProductLookupPort,
     unitOfWork: CheckoutUnitOfWorkPort,
+    providerSelector: PaymentProviderSelector,
+    idempotency: CartIdempotencyPort,
   ): CreateCheckoutUseCaseImpl =>
-    new CreateCheckoutUseCaseImpl(cartRepo, sessionLookup, productLookup, unitOfWork),
+    new CreateCheckoutUseCaseImpl(
+      cartRepo,
+      sessionLookup,
+      productLookup,
+      unitOfWork,
+      providerSelector,
+      idempotency,
+    ),
   inject: [
     CART_TOKENS.CART_REPOSITORY,
     CART_TOKENS.SESSION_LOOKUP,
     CHECKOUT_TOKENS.CHECKOUT_PRODUCT_LOOKUP,
     CHECKOUT_TOKENS.CHECKOUT_UNIT_OF_WORK,
+    PAYMENTS_TOKENS.PAYMENT_PROVIDER_SELECTOR,
+    CART_TOKENS.IDEMPOTENCY,
   ],
 };
 
@@ -60,10 +75,12 @@ const createCheckoutUseCaseProvider: Provider = {
  *
  * Convierte reservas ACTIVE en CHECKOUT_PENDING usando los puertos de
  * `cart-reservation` (dependencia directa checkout → cart-reservation,
- * ADR-013). Crea orden + pago pending idempotente.
+ * ADR-013). Crea orden + pago pending idempotente y resuelve la URL de
+ * checkout del proveedor vía el selector de estrategias de `payments`
+ * (dependencia directa checkout → payments).
  */
 @Module({
-  imports: [CartReservationModule],
+  imports: [CartReservationModule, PaymentsModule],
   controllers: [CheckoutController],
   providers: [
     CartPrismaService,

@@ -74,6 +74,8 @@ interface ValidatedPasswordResetConfirmBody {
 interface ValidatedLoginBody {
   readonly email: string;
   readonly password: string;
+  /** Sesión de carrito de invitado previa (opcional, UUID). */
+  readonly guest_session_id?: string;
 }
 
 /** Tipo del body validado para `POST /auth/register`. */
@@ -81,6 +83,8 @@ interface ValidatedRegisterBody {
   readonly display_name: string;
   readonly email: string;
   readonly password: string;
+  /** Sesión de carrito de invitado previa (opcional, UUID). */
+  readonly guest_session_id?: string;
 }
 
 /** Tipo del usuario autenticado extraído por el guard. */
@@ -185,6 +189,21 @@ export class IdentityController {
     });
   }
 
+  /**
+   * Limpia la cookie de sesión de carrito de invitado (`merkee_cart_session`).
+   * Se emite tras la promoción guest→cliente (login/registro): la sesión guest
+   * ya fue transferida/revocada y no debe quedar una cookie obsoleta que
+   * produzca un carrito fantasma.
+   */
+  private clearCartSessionCookie(res: Response): void {
+    res.clearCookie(CART_SESSION_COOKIE, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+    });
+  }
+
   /** `GET /me` — perfil del usuario autenticado. */
   @Get('me')
   @UseGuards(TransportAuthGuard)
@@ -220,14 +239,21 @@ export class IdentityController {
       typeof req.headers['x-request-id'] === 'string'
         ? (req.headers['x-request-id'] as string)
         : 'register';
+    // El body `guest_session_id` (cliente no-cookie) tiene prioridad; si no se
+    // envía, se usa la cookie HttpOnly `merkee_cart_session` leída por el server.
+    const guestSessionId =
+      body.guest_session_id ?? readCookie(req, CART_SESSION_COOKIE);
 
     const result = await this.registerUseCase.execute({
       email: body.email,
       password: body.password,
       displayName: body.display_name,
+      ...(guestSessionId ? { guestSessionId } : {}),
     });
     const value = projectResult(result, path, traceId);
     this.setRefreshCookie(res, value.refreshToken, new Date(value.session.expires_at));
+    // DEC: limpiar la cookie guest tras la promoción guest→cliente.
+    this.clearCartSessionCookie(res);
     return value.session;
   }
 
@@ -244,7 +270,10 @@ export class IdentityController {
       typeof req.headers['x-request-id'] === 'string'
         ? (req.headers['x-request-id'] as string)
         : 'login';
-    const guestSessionId = readCookie(req, CART_SESSION_COOKIE);
+    // El body `guest_session_id` (cliente no-cookie) tiene prioridad; si no se
+    // envía, se usa la cookie HttpOnly `merkee_cart_session` leída por el server.
+    const guestSessionId =
+      body.guest_session_id ?? readCookie(req, CART_SESSION_COOKIE);
 
     const result = await this.loginUseCase.execute({
       email: body.email,
@@ -253,6 +282,8 @@ export class IdentityController {
     });
     const value = projectResult(result, path, traceId);
     this.setRefreshCookie(res, value.refreshToken, new Date(value.session.expires_at));
+    // DEC: limpiar la cookie guest tras la promoción guest→cliente.
+    this.clearCartSessionCookie(res);
     return value.session;
   }
 

@@ -2,6 +2,8 @@ import { CheckoutController } from './checkout.controller';
 import { CHECKOUT_TOKENS } from './checkout.tokens';
 import { ok, fail } from '../../shared/domain/result';
 import { HttpException } from '@nestjs/common';
+import { TransportAuthGuard } from '../../shared/http/transport-auth.guard';
+import 'reflect-metadata';
 
 function errorResponseFrom(e: unknown): { code: string; status: number } {
   const err = e as HttpException;
@@ -105,6 +107,126 @@ describe('CheckoutController', () => {
       await expect(
         controller.createCheckout(validBody, '11111111-1111-4111-8111-111111111111', buildReq()),
       ).rejects.toThrow(HttpException);
+    });
+
+    it('aplica TransportAuthGuard (JWT real) en el controller', () => {
+      const guards: unknown[] = Reflect.getMetadata('__guards__', CheckoutController) ?? [];
+      expect(guards).toContain(TransportAuthGuard);
+    });
+
+    it('pasa payment_provider y devuelve CheckoutResponse completo', async () => {
+      mockUseCase.mockResolvedValue(
+        ok({
+          orderId: 'ord-1',
+          orderNumber: 'ORD-001',
+          paymentId: 'pay-1',
+          itemsSubtotalCop: 50000,
+          deliveryFeeCop: 5000,
+          ivaCop: 9500,
+          taxRateBasisPoints: 1900,
+          totalCop: 64500,
+          items: [
+            {
+              productId: 'prod-1',
+              productName: 'Manzana Roja',
+              unit: 'kg',
+              unitPriceCop: 4900,
+              quantity: 2,
+              subtotalCop: 9800,
+            },
+          ],
+          delivery: {
+            recipientName: 'Juan Pérez',
+            line1: 'Calle 123',
+            city: 'Bogotá',
+            phone: '+57 300 000 0000',
+          },
+          paymentProvider: 'WOMPI',
+          providerReference: 'wompi-tx-1',
+          providerCheckoutUrl: 'https://checkout.wompi.co/p/wompi-tx-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+        }),
+      );
+
+      const result = await controller.createCheckout(
+        validBody,
+        '11111111-1111-4111-8111-111111111111',
+        buildReq(),
+      );
+
+      expect(result.order.id).toBe('ord-1');
+      expect(result.order.items).toHaveLength(1);
+      expect(result.order.items[0].product_name).toBe('Manzana Roja');
+      expect(result.order.delivery_recipient_name).toBe('Juan Pérez');
+      expect(result.order.delivery_line1).toBe('Calle 123');
+      expect(result.order.delivery_city).toBe('Bogotá');
+      expect(result.order.delivery_phone).toBe('+57 300 000 0000');
+      expect(result.payment.provider).toBe('WOMPI');
+      expect(result.payment.provider_reference).toBe('wompi-tx-1');
+      expect(result.provider_checkout_url).toBe('https://checkout.wompi.co/p/wompi-tx-1');
+    });
+
+    it('pasa payment_provider del body al caso de uso', async () => {
+      mockUseCase.mockResolvedValue(
+        ok({
+          orderId: 'ord-1',
+          orderNumber: 'ORD-001',
+          paymentId: 'pay-1',
+          itemsSubtotalCop: 50000,
+          deliveryFeeCop: 5000,
+          ivaCop: 9500,
+          taxRateBasisPoints: 1900,
+          totalCop: 64500,
+          items: [],
+          delivery: { recipientName: 'Juan', line1: 'Calle 1', city: 'Bogotá', phone: '300' },
+          paymentProvider: 'MERCADO_PAGO',
+          providerReference: 'mp-1',
+          providerCheckoutUrl: 'https://checkout.mp/1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+        }),
+      );
+
+      await controller.createCheckout(
+        { ...validBody, payment_provider: 'MERCADO_PAGO' },
+        '11111111-1111-4111-8111-111111111111',
+        buildReq(),
+      );
+
+      expect(mockUseCase).toHaveBeenCalledWith(
+        expect.objectContaining({ paymentProvider: 'MERCADO_PAGO' }),
+      );
+    });
+
+    it('pasa guestSessionId desde la cookie merkee_cart_session', async () => {
+      mockUseCase.mockResolvedValue(
+        ok({
+          orderId: 'ord-1',
+          orderNumber: 'ORD-001',
+          paymentId: 'pay-1',
+          itemsSubtotalCop: 50000,
+          deliveryFeeCop: 5000,
+          ivaCop: 9500,
+          taxRateBasisPoints: 1900,
+          totalCop: 64500,
+          items: [],
+          delivery: { recipientName: 'Juan', line1: 'Calle 1', city: 'Bogotá', phone: '300' },
+          paymentProvider: 'WOMPI',
+          providerReference: 'wompi-tx-1',
+          providerCheckoutUrl: 'https://checkout.wompi.co/p/wompi-tx-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+        }),
+      );
+
+      const req = buildReq({ cookies: { merkee_cart_session: 'guest-session-1' } });
+      await controller.createCheckout(
+        validBody,
+        '11111111-1111-4111-8111-111111111111',
+        req,
+      );
+
+      expect(mockUseCase).toHaveBeenCalledWith(
+        expect.objectContaining({ guestSessionId: 'guest-session-1' }),
+      );
     });
   });
 });

@@ -287,6 +287,7 @@ const scheduledReaperProvider: Provider = {
     CART_TOKENS.CLOCK,
     CART_TOKENS.SESSION_RESOLVER,
     CART_TOKENS.TRANSITION_GUEST_TO_ADMIN,
+    CART_TOKENS.IDEMPOTENCY,
   ],
 })
 export class CartReservationModule {}

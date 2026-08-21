@@ -58,6 +58,48 @@ describe('Request validators (MSF-API-003)', () => {
     expect(result.issues.some((i) => i.field === 'password')).toBe(true);
   });
 
+  it('LoginRequest: acepta guest_session_id UUID válido (opcional)', () => {
+    const result = validateLoginRequest({
+      email: 'cliente1@merkee.co',
+      password: 'x',
+      guest_session_id: '550e8400-e29b-41d4-a716-446655440000',
+    });
+    expect(result.valid).toBe(true);
+    expect(result.issues).toEqual([]);
+  });
+
+  it('LoginRequest: rechaza guest_session_id no UUID', () => {
+    const result = validateLoginRequest({
+      email: 'cliente1@merkee.co',
+      password: 'x',
+      guest_session_id: 'no-es-uuid',
+    });
+    expect(result.valid).toBe(false);
+    expect(result.issues.some((i) => i.field === 'guest_session_id')).toBe(true);
+  });
+
+  it('RegisterRequest: acepta guest_session_id UUID válido (opcional)', () => {
+    const result = validateRegisterRequest({
+      display_name: 'Cliente Uno',
+      email: 'cliente1@merkee.co',
+      password: 'ContraseñaSegura123',
+      guest_session_id: '550e8400-e29b-41d4-a716-446655440000',
+    });
+    expect(result.valid).toBe(true);
+    expect(result.issues).toEqual([]);
+  });
+
+  it('RegisterRequest: rechaza guest_session_id no UUID', () => {
+    const result = validateRegisterRequest({
+      display_name: 'Cliente Uno',
+      email: 'cliente1@merkee.co',
+      password: 'ContraseñaSegura123',
+      guest_session_id: 'nope',
+    });
+    expect(result.valid).toBe(false);
+    expect(result.issues.some((i) => i.field === 'guest_session_id')).toBe(true);
+  });
+
   it('PasswordResetRequest: rechaza email ausente', () => {
     const result = validatePasswordResetRequest({});
     expect(result.valid).toBe(false);

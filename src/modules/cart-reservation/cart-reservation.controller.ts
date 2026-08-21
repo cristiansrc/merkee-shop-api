@@ -88,6 +88,12 @@ export class CartReservationController {
     this.setSessionCookieIfAny(res, resolution);
     const traceId = this.generateTraceId();
     const result = await this.getCartUseCase.execute(resolution.sessionId);
+    // Self-heal: una sesión guest obsoleta/expirada no debe dejar una cookie
+    // fantasma. Al devolver SESSION_EXPIRED se limpia la cookie de invitado
+    // para que el siguiente GET /cart parta de una sesión nueva.
+    if (!result.ok && result.error.code === 'SESSION_EXPIRED') {
+      this.clearGuestCookie(res);
+    }
     const value = projectResult(result, '/cart', traceId);
     return this.mapToCartResponse(value);
   }
@@ -305,6 +311,16 @@ export class CartReservationController {
         expires: resolution.cookie.options.expires,
       });
     }
+  }
+
+  /** Limpia la cookie de sesión de invitado (self-heal de cookie obsoleta). */
+  private clearGuestCookie(res: Response): void {
+    res.clearCookie('merkee_cart_session', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+    });
   }
 
   /** Genera un trace ID para la respuesta. */

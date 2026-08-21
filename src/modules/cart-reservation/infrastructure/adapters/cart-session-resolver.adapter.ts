@@ -3,6 +3,7 @@ import { randomBytes, createHash } from 'crypto';
 import { CartPrismaService } from '../cart-prisma.service';
 import { CartSessionResolverPort, CartSessionResolution } from '../../domain/ports/cart-session-resolver.port';
 import { ClockPort } from '../../domain/ports/clock.port';
+import { SessionLookupPort } from '../../domain/ports/session-lookup.port';
 import { CART_TOKENS } from '../../cart-reservation.tokens';
 import { JwtPort } from '../../../identity/domain/ports/jwt.port';
 import { IDENTITY_TOKENS } from '../../../identity/identity.tokens';
@@ -38,6 +39,7 @@ export class CartSessionResolverAdapter implements CartSessionResolverPort {
   constructor(
     @Inject(IDENTITY_TOKENS.JWT) private readonly jwt: JwtPort,
     @Inject(CART_TOKENS.CLOCK) private readonly clock: ClockPort,
+    @Inject(CART_TOKENS.SESSION_LOOKUP) private readonly sessionLookup: SessionLookupPort,
     private readonly prisma: CartPrismaService,
   ) {}
 
@@ -48,9 +50,25 @@ export class CartSessionResolverAdapter implements CartSessionResolverPort {
   ): Promise<CartSessionResolution> {
     const traceId = `cart-session-${Date.now()}`;
 
-    // 1. Cookie presente → reutilizar sesión existente
+    // 1. Cookie presente → validar sesión guest; self-heal si es obsoleta.
     if (typeof cookieSessionId === 'string' && cookieSessionId.length > 0) {
-      return { sessionId: cookieSessionId };
+      const session = await this.sessionLookup.findById(cookieSessionId);
+      const now = this.clock.now();
+      const isValidGuest =
+        session !== null &&
+        session.sessionKind === 'GUEST' &&
+        session.revokedAt === null &&
+        session.expiresAt > now;
+
+      if (isValidGuest) {
+        return { sessionId: cookieSessionId };
+      }
+
+      // Self-heal (ADR-008): la cookie apunta a una sesión guest inexistente,
+      // expirada o revocada (p. ej. tras guest→cliente). En lugar de devolver
+      // un 410 fantasma, se crea una guest nueva y el controller emite la
+      // cookie nueva (mismo nombre/path), sobreescribiendo la obsoleta.
+      return this.createGuestSession();
     }
 
     // 2. Bearer token presente → verificar JWT

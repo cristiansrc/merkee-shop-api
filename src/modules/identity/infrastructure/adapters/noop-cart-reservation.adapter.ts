@@ -27,4 +27,12 @@ export class NoopCartReservationAdapter implements CartReservationPort {
     // Noop: MSF-CART-001 pendiente
     return ok(undefined);
   }
+
+  async transferGuestCart(
+    _guestSessionId: string,
+    _targetSessionId: string,
+  ): Promise<Result<void, DomainError>> {
+    // Noop: MSF-CART-001 pendiente
+    return ok(undefined);
+  }
 }

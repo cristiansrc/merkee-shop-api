@@ -81,6 +81,11 @@ export function validateRegisterRequest(value: unknown): ValidationResult {
     minLength: 12,
     maxLength: 128,
   });
+  // `guest_session_id` opcional (promoción guest→cliente). Si se envía, debe
+  // ser un UUID válido; no rompe los payloads existentes.
+  if (value.guest_session_id !== undefined) {
+    checkUuid(ctx, 'guest_session_id', value.guest_session_id);
+  }
   return toResult(ctx);
 }
 
@@ -94,6 +99,11 @@ export function validateLoginRequest(value: unknown): ValidationResult {
   checkEmail(ctx, 'email', value.email);
   checkRequired(ctx, 'password', value.password);
   checkString(ctx, 'password', value.password, { minLength: 1, maxLength: 128 });
+  // `guest_session_id` opcional (promoción guest→cliente). Si se envía, debe
+  // ser un UUID válido; no rompe los payloads existentes.
+  if (value.guest_session_id !== undefined) {
+    checkUuid(ctx, 'guest_session_id', value.guest_session_id);
+  }
   return toResult(ctx);
 }
 

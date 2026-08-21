@@ -109,10 +109,11 @@ export class PrismaCheckoutUnitOfWorkAdapter implements CheckoutUnitOfWorkPort {
               const payment = await tx.payment.create({
                 data: {
                   orderId: order.id,
-                  provider: 'WOMPI', // Default, se actualizará en MSF-PAY-002
+                  provider: params.provider,
                   status: 'PENDING',
                   amountCop: params.totalCop,
-                  idempotencyKey: crypto.randomUUID(),
+                  providerReference: params.providerReference,
+                  idempotencyKey: params.paymentIdempotencyKey,
                 },
               });
 
@@ -120,6 +121,7 @@ export class PrismaCheckoutUnitOfWorkAdapter implements CheckoutUnitOfWorkPort {
                 orderId: order.id,
                 orderNumber: order.orderNumber,
                 paymentId: payment.id,
+                createdAt: order.createdAt.toISOString(),
               };
             },
           },

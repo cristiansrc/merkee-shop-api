@@ -1,7 +1,6 @@
 import { Global, Module, Provider } from '@nestjs/common';
 import { PrismaModule } from '../cart-reservation/infrastructure/prisma.module';
 import { CartReservationModule } from '../cart-reservation/cart-reservation.module';
-import { CART_TOKENS } from '../cart-reservation/cart-reservation.tokens';
 import { IDENTITY_TOKENS } from './identity.tokens';
 import { GetMyProfileUseCase } from './application/use-cases/get-my-profile.use-case';
 import { UpdateProfileUseCase } from './application/use-cases/update-profile.use-case';
@@ -41,6 +40,7 @@ import { EmailPort } from './domain/ports/email.port';
 import { ResetPasswordUnitOfWorkPort } from './domain/ports/reset-password-unit-of-work.port';
 import { RequestPasswordResetUnitOfWorkPort } from './domain/ports/request-password-reset-unit-of-work.port';
 import { CartReservationPort } from './domain/ports/cart-reservation.port';
+import { CartReservationAdapter } from './infrastructure/adapters/cart-reservation.adapter';
 import { SESSION_INACTIVITY_TTL_MS } from './domain/session.config';
 
 /** TTL del cookie rotado de refresh alineado con sesiones (30 minutos de inactividad). */
@@ -116,12 +116,14 @@ const updateProfileUnitOfWorkProvider: Provider = {
 };
 
 // ---------------------------------------------------------------------------
-// Provider de CartReservationPort (MSF-CART-002): adapter real
+// Provider de CartReservationPort (MSF-CART-002): adapter real que delega en
+// los puertos de cart-reservation (libera reservas, cierra carrito y transfiere
+// carrito guest→cliente).
 // ---------------------------------------------------------------------------
 
 const cartReservationProvider: Provider = {
   provide: IDENTITY_TOKENS.CART_RESERVATION,
-  useExisting: CART_TOKENS.TRANSITION_GUEST_TO_ADMIN,
+  useClass: CartReservationAdapter,
 };
 
 // ---------------------------------------------------------------------------
@@ -298,6 +300,7 @@ const registerUseCaseProvider: Provider = {
     jwt: JwtPort,
     cookieToken: CookieTokenPort,
     clock: ClockPort,
+    cartReservation: CartReservationPort,
   ): RegisterUseCase =>
     new RegisterUseCase(
       userRepo,
@@ -306,6 +309,7 @@ const registerUseCaseProvider: Provider = {
       jwt,
       cookieToken,
       clock,
+      cartReservation,
     ),
   inject: [
     IDENTITY_TOKENS.USER_REPOSITORY,
@@ -314,6 +318,7 @@ const registerUseCaseProvider: Provider = {
     IDENTITY_TOKENS.JWT,
     IDENTITY_TOKENS.COOKIE_TOKEN,
     IDENTITY_TOKENS.CLOCK,
+    IDENTITY_TOKENS.CART_RESERVATION,
   ],
 };
 

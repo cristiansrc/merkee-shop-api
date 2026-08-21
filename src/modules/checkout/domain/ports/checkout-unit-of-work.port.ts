@@ -60,6 +60,9 @@ export interface OrderCreatorPort {
     deliveryLine1: string;
     deliveryCity: string;
     deliveryPhone: string;
+    provider: 'WOMPI' | 'MERCADO_PAGO';
+    providerReference: string | null;
+    paymentIdempotencyKey: string;
     items: ReadonlyArray<{
       productId: string;
       productName: string;
@@ -68,7 +71,7 @@ export interface OrderCreatorPort {
       quantity: number;
       subtotalCop: bigint;
     }>;
-  }): Promise<{ orderId: string; orderNumber: string; paymentId: string }>;
+  }): Promise<{ orderId: string; orderNumber: string; paymentId: string; createdAt: string }>;
 }
 
 /** Puerto de idempotencia dentro de la transacción de checkout. */

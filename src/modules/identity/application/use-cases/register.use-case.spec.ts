@@ -5,6 +5,7 @@ import { PasswordHasherPort } from '../../domain/ports/password-hasher.port';
 import { JwtPort } from '../../domain/ports/jwt.port';
 import { CookieTokenPort } from '../../domain/ports/cookie-token.port';
 import { ClockPort } from '../../domain/ports/clock.port';
+import { CartReservationPort } from '../../domain/ports/cart-reservation.port';
 import { User } from '../../domain/models/user';
 import { Session } from '../../domain/models/session';
 import { isSuccess, ok, fail, isFailure } from '../../../../shared/domain/result';
@@ -126,6 +127,15 @@ function stubClock(overrides?: Partial<ClockPort>): ClockPort {
   };
 }
 
+function stubCartReservation(overrides?: Partial<CartReservationPort>): CartReservationPort {
+  return {
+    releaseActiveReservations: jest.fn().mockResolvedValue(ok(undefined)),
+    closeCart: jest.fn().mockResolvedValue(ok(undefined)),
+    transferGuestCart: jest.fn().mockResolvedValue(ok(undefined)),
+    ...overrides,
+  };
+}
+
 function createUseCase(overrides?: {
   userRepo?: Partial<UserRepositoryPort>;
   sessionRepo?: Partial<SessionRepositoryPort>;
@@ -133,6 +143,7 @@ function createUseCase(overrides?: {
   jwt?: Partial<JwtPort>;
   cookieToken?: Partial<CookieTokenPort>;
   clock?: Partial<ClockPort>;
+  cartReservation?: Partial<CartReservationPort>;
 }): RegisterUseCase {
   return new RegisterUseCase(
     stubUserRepo(overrides?.userRepo),
@@ -141,6 +152,7 @@ function createUseCase(overrides?: {
     stubJwt(overrides?.jwt),
     stubCookieToken(overrides?.cookieToken),
     stubClock(overrides?.clock),
+    stubCartReservation(overrides?.cartReservation),
   );
 }
 
@@ -170,6 +182,53 @@ describe('RegisterUseCase', () => {
       expect(result.value.session.user.must_change_password).toBe(false);
       expect(result.value.refreshToken).toBe('raw-refresh-token');
     }
+  });
+
+  describe('Promoción guest→cliente (registro)', () => {
+    it('transfiere el carrito guest a la nueva sesión y revoca la guest', async () => {
+      const guestSession: Session = {
+        id: 'guest-session-1',
+        userId: null,
+        sessionKind: 'GUEST',
+        refreshTokenHash: 'guest-hash',
+        expiresAt: new Date(fixedDate.getTime() + 60000),
+        lastActivityAt: fixedDate,
+        revokedAt: null,
+        createdAt: fixedDate,
+      };
+      const transferGuestCart = jest.fn().mockResolvedValue(ok(undefined as never));
+      const revoke = jest.fn().mockResolvedValue(ok(undefined as never));
+
+      const uc = createUseCase({
+        sessionRepo: {
+          findById: jest.fn().mockResolvedValue(ok(guestSession)),
+          revoke,
+        },
+        cartReservation: { transferGuestCart },
+      });
+
+      const result = await uc.execute({ ...command, guestSessionId: 'guest-session-1' });
+
+      expect(isSuccess(result)).toBe(true);
+      expect(transferGuestCart).toHaveBeenCalledWith('guest-session-1', 'session-1');
+      expect(revoke).toHaveBeenCalledWith('guest-session-1');
+    });
+
+    it('no revoca ni transfiere si no hay sesión guest', async () => {
+      const transferGuestCart = jest.fn().mockResolvedValue(ok(undefined as never));
+      const revoke = jest.fn().mockResolvedValue(ok(undefined as never));
+
+      const uc = createUseCase({
+        sessionRepo: { findById: jest.fn().mockResolvedValue(ok(null)), revoke },
+        cartReservation: { transferGuestCart },
+      });
+
+      const result = await uc.execute(command);
+
+      expect(isSuccess(result)).toBe(true);
+      expect(transferGuestCart).not.toHaveBeenCalled();
+      expect(revoke).not.toHaveBeenCalled();
+    });
   });
 
   it('falla con EMAIL_ALREADY_REGISTERED si el email ya existe', async () => {
