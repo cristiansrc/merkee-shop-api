@@ -221,7 +221,7 @@ describe('RemoveCartItemUseCase', () => {
     expect(mockIdempotency.find).not.toHaveBeenCalled();
   });
 
-  it('devuelve 403 cuando un cliente debe cambiar contraseña', async () => {
+  it('permite cliente con mustChangePassword=true a eliminar item', async () => {
     mockSessionLookup.findById.mockResolvedValue({
       ...validSession,
       userId: 'user-cliente',
@@ -232,6 +232,30 @@ describe('RemoveCartItemUseCase', () => {
       role: 'cliente',
       mustChangePassword: true,
     });
+    mockIdempotency.find.mockResolvedValue(null);
+
+    mockUnitOfWork.run.mockImplementation(async (work) => {
+      const ctx = {
+        cartRepo: {
+          findCartWithItems: jest.fn().mockResolvedValue({
+            cart: { id: 'cart-1', sessionId: 'session-123', status: 'ACTIVE', itemsSubtotalCop: 10000n, deliveryFeeCop: 5000n, ivaCop: 1900n, taxRateBasisPoints: 1900, totalCop: 16900n, reservationExpiresAt: new Date() },
+            items: [
+              { id: 'item-1', productId: 'prod-1', quantity: 2, unitPriceCop: 5000n, subtotalCop: 10000n, reservation: { id: 'res-1', status: 'ACTIVE' } },
+            ],
+          }),
+          findCartItem: jest.fn().mockResolvedValue({ id: 'item-1', quantity: 2 }),
+          deleteCartItem: jest.fn(),
+          updateCartTotals: jest.fn(),
+          touchSession: jest.fn(),
+        },
+        stockReservation: { release: jest.fn() },
+        idempotency: {
+          findForUpdate: jest.fn().mockResolvedValue(null),
+          save: jest.fn(),
+        },
+      };
+      return work(ctx);
+    });
 
     const result = await useCase.execute({
       sessionId: 'session-123',
@@ -240,11 +264,7 @@ describe('RemoveCartItemUseCase', () => {
       canonicalBody: '{"product_id":"prod-1"}',
     });
 
-    expect(isFailure(result)).toBe(true);
-    if (isFailure(result)) {
-      expect(result.error.code).toBe('INITIAL_PASSWORD_CHANGE_REQUIRED');
-    }
-    expect(mockIdempotency.find).not.toHaveBeenCalled();
+    expect(isSuccess(result)).toBe(true);
   });
 
   it('continúa cuando el usuario de la sesión no existe en el lookup', async () => {

@@ -86,6 +86,7 @@ export class PrismaUserRepositoryAdapter implements UserRepositoryPort {
           displayName: data.displayName.trim() || data.email.split('@')[0],
           phone: data.phone?.trim() || null,
           role: data.role,
+          mustChangePassword: data.role === 'admin',
         },
         select: {
           id: true,

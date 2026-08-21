@@ -19,7 +19,7 @@ export interface GetCartResult {
 /**
  * Caso de uso: obtener el carrito del servidor (AC-02, AC-03).
  *
- * Guest y cliente pueden operar un carrito servidor con reserva.
+ * Guest y cliente (incluso con mustChangePassword) pueden operar un carrito servidor con reserva.
  * Un admin recibe 403 ADMIN_STOREFRONT_PURCHASE_FORBIDDEN.
  * Un acceso válido renueva la expiración de 10 minutos.
  * Una sesión/reserva expirada devuelve 410 Gone.
@@ -53,9 +53,6 @@ export class GetCartUseCase {
       const user = await this.sessionLookup.findUserById(session.userId);
       if (user && user.role === 'admin') {
         return fail(CartErrors.adminStorefrontPurchaseForbidden());
-      }
-      if (user && user.mustChangePassword) {
-        return fail(CartErrors.initialPasswordChangeRequired());
       }
     }
 

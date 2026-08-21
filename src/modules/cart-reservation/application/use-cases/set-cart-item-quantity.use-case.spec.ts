@@ -192,7 +192,7 @@ describe('SetCartItemQuantityUseCase', () => {
     }
   });
 
-  it('devuelve INITIAL_PASSWORD_CHANGE_REQUIRED cuando mustChangePassword es true', async () => {
+  it('permite cliente con mustChangePassword=true a ajustar cantidad', async () => {
     mockSessionLookup.findById.mockResolvedValue({
       ...validSession,
       userId: 'user-1',
@@ -203,19 +203,54 @@ describe('SetCartItemQuantityUseCase', () => {
       role: 'cliente',
       mustChangePassword: true,
     });
+    mockIdempotency.find.mockResolvedValue(null);
+
+    mockUnitOfWork.run.mockImplementation(async (work) => {
+      const ctx = {
+        cartRepo: {
+          findCartWithItems: jest.fn().mockResolvedValue({
+            cart: { id: 'cart-1', sessionId: 'session-123', status: 'ACTIVE', itemsSubtotalCop: 10000n, deliveryFeeCop: 5000n, ivaCop: 1900n, taxRateBasisPoints: 1900, totalCop: 16900n, reservationExpiresAt: new Date() },
+            items: [
+              { id: 'item-1', productId: 'prod-1', quantity: 2, unitPriceCop: 5000n, subtotalCop: 10000n, reservation: { id: 'res-1', status: 'ACTIVE' } },
+            ],
+          }),
+          findCartItem: jest.fn().mockResolvedValue({ id: 'item-1', quantity: 2 }),
+          updateCartItemQuantity: jest.fn(),
+          updateCartTotals: jest.fn(),
+          touchSession: jest.fn(),
+        },
+        stockReservation: {
+          adjustReservation: jest.fn(),
+        },
+        idempotency: {
+          findForUpdate: jest.fn().mockResolvedValue(null),
+          save: jest.fn(),
+        },
+      };
+      return work(ctx);
+    });
+
+    mockProductLookup.findActiveForCart.mockResolvedValue({
+      id: 'prod-1',
+      name: 'Test',
+      regularPriceCop: 5000n,
+      salePriceCop: 0n,
+      unit: 'kg',
+      stockOnHand: 10,
+      stockReserved: 2,
+      images: [],
+      category: { id: 'cat-1', name: 'Cat', imageKey: 'k' },
+    });
 
     const result = await useCase.execute({
       sessionId: 'session-123',
       productId: 'prod-1',
-      quantity: 3,
+      quantity: 5,
       idempotencyKey: '550e8400-e29b-41d4-a716-446655440000',
-      canonicalBody: '{"quantity":3}',
+      canonicalBody: '{"quantity":5}',
     });
 
-    expect(isFailure(result)).toBe(true);
-    if (isFailure(result)) {
-      expect(result.error.code).toBe('INITIAL_PASSWORD_CHANGE_REQUIRED');
-    }
+    expect(mockUnitOfWork.run).toHaveBeenCalled();
   });
 
   it('devuelve replay cuando idempotencia existe con mismo hash', async () => {

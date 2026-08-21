@@ -51,7 +51,6 @@ export class RemoveCartItemUseCase {
     if (session.userId) {
       const user = await this.sessionLookup.findUserById(session.userId);
       if (user && user.role === 'admin') return fail(CartErrors.adminStorefrontPurchaseForbidden());
-      if (user && user.mustChangePassword) return fail(CartErrors.initialPasswordChangeRequired());
     }
 
     // 2. Verificar idempotencia

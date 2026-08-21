@@ -157,7 +157,9 @@ describe('GetCartUseCase', () => {
     }
   });
 
-  it('devuelve 403 cuando un cliente debe cambiar contraseña', async () => {
+  it('permite acceso a cliente con mustChangePassword=true', async () => {
+    const now = new Date('2026-08-17T12:00:00Z');
+    mockClock.now.mockReturnValue(now);
     mockSessionLookup.findById.mockResolvedValue({
       id: 'session-123',
       userId: 'user-cliente',
@@ -171,14 +173,14 @@ describe('GetCartUseCase', () => {
       role: 'cliente',
       mustChangePassword: true,
     });
+    mockCartRepo.findCartWithItems.mockResolvedValue(null);
 
     const result = await useCase.execute('session-123');
 
-    expect(isFailure(result)).toBe(true);
-    if (isFailure(result)) {
-      expect(result.error.code).toBe('INITIAL_PASSWORD_CHANGE_REQUIRED');
+    expect(isSuccess(result)).toBe(true);
+    if (isSuccess(result)) {
+      expect(result.value.cartWithItems.cart.status).toBe('ACTIVE');
     }
-    expect(mockCartRepo.findCartWithItems).not.toHaveBeenCalled();
   });
 
   it('continúa cuando el usuario de la sesión no existe en el lookup', async () => {

@@ -283,7 +283,7 @@ describe('AddCartItemUseCase', () => {
     }
   });
 
-  it('devuelve INITIAL_PASSWORD_CHANGE_REQUIRED cuando mustChangePassword es true', async () => {
+  it('permite cliente con mustChangePassword=true a agregar item', async () => {
     mockSessionLookup.findById.mockResolvedValue({
       ...validSession,
       userId: 'user-1',
@@ -294,6 +294,32 @@ describe('AddCartItemUseCase', () => {
       role: 'cliente',
       mustChangePassword: true,
     });
+    mockIdempotency.find.mockResolvedValue(null);
+    mockProductLookup.findActiveForCart.mockResolvedValue(validProduct);
+
+    mockUnitOfWork.run.mockImplementation(async (work) => {
+      const ctx = {
+        cartRepo: {
+          findCartWithItems: jest.fn().mockResolvedValue({
+            cart: { id: 'cart-1', status: 'ACTIVE', itemsSubtotalCop: 0n, deliveryFeeCop: 5000n, ivaCop: 0n, taxRateBasisPoints: 1900, totalCop: 5000n, reservationExpiresAt: null },
+            items: [],
+          }),
+          createCart: jest.fn().mockResolvedValue({ id: 'cart-new' }),
+          findCartItem: jest.fn().mockResolvedValue(null),
+          createCartItem: jest.fn().mockResolvedValue({ id: 'item-1' }),
+          updateCartTotals: jest.fn(),
+          touchSession: jest.fn(),
+        },
+        stockReservation: {
+          reserve: jest.fn().mockResolvedValue({ id: 'res-1' }),
+        },
+        idempotency: {
+          findForUpdate: jest.fn().mockResolvedValue(null),
+          save: jest.fn(),
+        },
+      };
+      return work(ctx);
+    });
 
     const result = await useCase.execute({
       sessionId: 'session-123',
@@ -303,10 +329,7 @@ describe('AddCartItemUseCase', () => {
       canonicalBody: '{"product_id":"prod-1","quantity":1}',
     });
 
-    expect(isFailure(result)).toBe(true);
-    if (isFailure(result)) {
-      expect(result.error.code).toBe('INITIAL_PASSWORD_CHANGE_REQUIRED');
-    }
+    expect(mockUnitOfWork.run).toHaveBeenCalled();
   });
 
   it('retorna replay desde UoW cuando idempotencia detecta carrera', async () => {

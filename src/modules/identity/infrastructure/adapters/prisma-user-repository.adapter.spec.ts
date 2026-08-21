@@ -107,6 +107,46 @@ describe('PrismaUserRepositoryAdapter', () => {
       if (result.ok) expect(result.value.id).toBe('u1');
     });
 
+    it('derive mustChangePassword=false para cliente', async () => {
+      (prisma.user.create as jest.Mock).mockResolvedValue(mockPrismaUser);
+      await adapter.create({
+        email: 'test@example.com',
+        passwordHash: 'hash',
+        displayName: 'Test',
+        phone: null,
+        role: 'cliente',
+      });
+      expect(prisma.user.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            mustChangePassword: false,
+          }),
+        }),
+      );
+    });
+
+    it('derive mustChangePassword=true para admin', async () => {
+      (prisma.user.create as jest.Mock).mockResolvedValue({
+        ...mockPrismaUser,
+        role: 'admin',
+        mustChangePassword: true,
+      });
+      await adapter.create({
+        email: 'admin@example.com',
+        passwordHash: 'hash',
+        displayName: 'Admin',
+        phone: null,
+        role: 'admin',
+      });
+      expect(prisma.user.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            mustChangePassword: true,
+          }),
+        }),
+      );
+    });
+
     it('usa email.split cuando displayName está vacío', async () => {
       (prisma.user.create as jest.Mock).mockResolvedValue(mockPrismaUser);
       const result = await adapter.create({

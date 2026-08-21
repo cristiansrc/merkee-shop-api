@@ -35,7 +35,7 @@ const RESERVATION_TTL_MINUTES = 10;
 /**
  * Caso de uso: agregar cantidad de producto al carrito y reservar stock (AC-02).
  *
- * Guest y cliente pueden operar un carrito servidor con reserva.
+ * Guest y cliente (incluso con mustChangePassword) pueden operar un carrito servidor con reserva.
  * Un admin recibe 403 ADMIN_STOREFRONT_PURCHASE_FORBIDDEN.
  * La reserva es atómica: lock por product_id ASC, valida disponibilidad
  * y actualiza products.stock_reserved.
@@ -74,9 +74,6 @@ export class AddCartItemUseCase {
       const user = await this.sessionLookup.findUserById(session.userId);
       if (user && user.role === 'admin') {
         return fail(CartErrors.adminStorefrontPurchaseForbidden());
-      }
-      if (user && user.mustChangePassword) {
-        return fail(CartErrors.initialPasswordChangeRequired());
       }
     }
 
