@@ -25,14 +25,12 @@ import {
 } from '../../contract/validation/request-validators';
 import { validateIdempotencyKey } from '../../contract/validation/header-validators';
 import { CART_TOKENS } from './cart-reservation.tokens';
+import { CartSessionResolverPort } from './domain/ports/cart-session-resolver.port';
 import { GetCartUseCase, GetCartResult } from './application/use-cases/get-cart.use-case';
 import { AddCartItemUseCase, AddCartItemCommand } from './application/use-cases/add-cart-item.use-case';
 import { SetCartItemQuantityUseCase, SetCartItemQuantityCommand } from './application/use-cases/set-cart-item-quantity.use-case';
 import { RemoveCartItemUseCase, RemoveCartItemCommand } from './application/use-cases/remove-cart-item.use-case';
 import { CartResponse } from '../../contract/schemas';
-
-/** Nombre de la cookie de sesión de carrito de invitado. */
-const CART_SESSION_COOKIE = 'merkee_cart_session';
 
 /** Tipo del body validado para POST /cart/items. */
 interface ValidatedCartItemBody {
@@ -50,10 +48,16 @@ interface ValidatedSetQuantityBody {
  *
  * Valida transporte, invoca un único puerto de entrada y proyecta el Result
  * a HTTP. Nunca contiene reglas de negocio ni Prisma.
+ *
+ * La resolución de sesión (cookie / Bearer / guest) se delega a
+ * `CartSessionResolverPort`, que encapsula JwtPort, creación de sesiones
+ * y generación de cookies opacas.
  */
 @Controller('cart')
 export class CartReservationController {
   constructor(
+    @Inject(CART_TOKENS.SESSION_RESOLVER)
+    private readonly sessionResolver: CartSessionResolverPort,
     @Inject(CART_TOKENS.GET_CART_USE_CASE)
     private readonly getCartUseCase: GetCartUseCase,
     @Inject(CART_TOKENS.ADD_CART_ITEM_USE_CASE)
@@ -67,7 +71,7 @@ export class CartReservationController {
   /**
    * GET /cart — Obtiene el carrito del servidor (AC-02, AC-03).
    *
-   * Security: bearerAuth | cartSessionCookie
+   * Security: bearerAuth | cartSessionCookie | {} (guest cookie creación)
    * Renueva la sesión y reservas ACTIVE a now()+10m.
    */
   @Get()
@@ -75,9 +79,14 @@ export class CartReservationController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ): Promise<CartResponse> {
-    const sessionId = this.extractSessionId(req);
+    const resolution = await this.sessionResolver.resolve(
+      this.readCookie(req),
+      this.readAuth(req),
+      req.path,
+    );
+    this.setSessionCookieIfAny(res, resolution);
     const traceId = this.generateTraceId();
-    const result = await this.getCartUseCase.execute(sessionId);
+    const result = await this.getCartUseCase.execute(resolution.sessionId);
     const value = projectResult(result, '/cart', traceId);
     return this.mapToCartResponse(value);
   }
@@ -95,8 +104,14 @@ export class CartReservationController {
     body: ValidatedCartItemBody,
     @Headers('idempotency-key') idempotencyKey: string | undefined,
     @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<CartResponse> {
-    const sessionId = this.extractSessionId(req);
+    const resolution = await this.sessionResolver.resolve(
+      this.readCookie(req),
+      this.readAuth(req),
+      req.path,
+    );
+    this.setSessionCookieIfAny(res, resolution);
     const traceId = this.generateTraceId();
     const path = '/cart/items';
 
@@ -126,7 +141,7 @@ export class CartReservationController {
     }
 
     const command: AddCartItemCommand = {
-      sessionId,
+      sessionId: resolution.sessionId,
       productId: body.product_id,
       quantity: body.quantity,
       idempotencyKey,
@@ -151,8 +166,14 @@ export class CartReservationController {
     body: ValidatedSetQuantityBody,
     @Headers('idempotency-key') idempotencyKey: string | undefined,
     @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<CartResponse> {
-    const sessionId = this.extractSessionId(req);
+    const resolution = await this.sessionResolver.resolve(
+      this.readCookie(req),
+      this.readAuth(req),
+      req.path,
+    );
+    this.setSessionCookieIfAny(res, resolution);
     const traceId = this.generateTraceId();
     const path = `/cart/items/${productId}`;
 
@@ -182,7 +203,7 @@ export class CartReservationController {
     }
 
     const command: SetCartItemQuantityCommand = {
-      sessionId,
+      sessionId: resolution.sessionId,
       productId,
       quantity: body.quantity,
       idempotencyKey,
@@ -205,8 +226,14 @@ export class CartReservationController {
     @Param('productId') productId: string,
     @Headers('idempotency-key') idempotencyKey: string | undefined,
     @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<void> {
-    const sessionId = this.extractSessionId(req);
+    const resolution = await this.sessionResolver.resolve(
+      this.readCookie(req),
+      this.readAuth(req),
+      req.path,
+    );
+    this.setSessionCookieIfAny(res, resolution);
     const traceId = this.generateTraceId();
     const path = `/cart/items/${productId}`;
 
@@ -236,7 +263,7 @@ export class CartReservationController {
     }
 
     const command: RemoveCartItemCommand = {
-      sessionId,
+      sessionId: resolution.sessionId,
       productId,
       idempotencyKey,
       canonicalBody: JSON.stringify({ product_id: productId }),
@@ -246,36 +273,37 @@ export class CartReservationController {
     projectResult(result, path, traceId);
   }
 
-  /** Extrae el sessionId de la cookie o el token de autenticación. */
-  private extractSessionId(req: Request): string {
-    const cookie = req.cookies?.[CART_SESSION_COOKIE];
-    if (typeof cookie === 'string' && cookie.length > 0) {
-      return cookie;
-    }
-    // Bearer token: se extrae del JWT payload (simplificado para skeleton)
+  // ---------------------------------------------------------------------------
+  // Helpers privados (transporte HTTP)
+  // ---------------------------------------------------------------------------
+
+  /** Lee la cookie de sesión de carrito de forma defensiva. */
+  private readCookie(req: Request): string | undefined {
+    const cookies = (req as Request & { cookies?: Record<string, unknown> }).cookies;
+    const value = cookies?.['merkee_cart_session'];
+    return typeof value === 'string' && value.length > 0 ? value : undefined;
+  }
+
+  /** Lee el header Authorization de forma defensiva. */
+  private readAuth(req: Request): string | undefined {
     const auth = req.headers?.authorization;
-    if (typeof auth === 'string' && auth.startsWith('Bearer ')) {
-      // En producción esto se resuelve con JwtPort.verify
-      // Por ahora se extrae del cookie o se falla
-      throw new BadRequestException({
-        timestamp: new Date().toISOString(),
-        status: 401,
-        error: 'Unauthorized',
-        code: 'AUTHENTICATION_REQUIRED',
-        message: 'Se requiere autenticación.',
-        path: req.path,
-        trace_id: '',
+    return typeof auth === 'string' && auth.length > 0 ? auth : undefined;
+  }
+
+  /** Emite la cookie de sesión GUEST si la resolución la incluye. */
+  private setSessionCookieIfAny(
+    res: Response,
+    resolution: { cookie?: { name: string; value: string; options: { httpOnly: boolean; secure: boolean; sameSite: string; path: string; expires: Date } } },
+  ): void {
+    if (resolution.cookie) {
+      res.cookie(resolution.cookie.name, resolution.cookie.value, {
+        httpOnly: resolution.cookie.options.httpOnly,
+        secure: resolution.cookie.options.secure,
+        sameSite: resolution.cookie.options.sameSite as 'lax',
+        path: resolution.cookie.options.path,
+        expires: resolution.cookie.options.expires,
       });
     }
-    throw new BadRequestException({
-      timestamp: new Date().toISOString(),
-      status: 401,
-      error: 'Unauthorized',
-      code: 'AUTHENTICATION_REQUIRED',
-      message: 'Se requiere sesión de carrito.',
-      path: req.path,
-      trace_id: '',
-    });
   }
 
   /** Genera un trace ID para la respuesta. */

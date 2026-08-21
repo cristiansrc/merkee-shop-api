@@ -12,6 +12,7 @@ import { SystemClockAdapter } from './infrastructure/adapters/system-clock.adapt
 import { PrismaCartReaperAdapter } from './infrastructure/adapters/prisma-cart-reaper.adapter';
 import { PrometheusCartReaperMetricsAdapter } from './infrastructure/adapters/prometheus-cart-reaper-metrics.adapter';
 import { CartTransitionGuestToAdminAdapter } from './infrastructure/adapters/cart-transition-guest-to-admin.adapter';
+import { CartSessionResolverAdapter } from './infrastructure/adapters/cart-session-resolver.adapter';
 import { ScheduledCartReaperAdapter } from './infrastructure/adapters/scheduled-cart-reaper.adapter';
 import { GetCartUseCase } from './application/use-cases/get-cart.use-case';
 import { AddCartItemUseCase } from './application/use-cases/add-cart-item.use-case';
@@ -20,6 +21,7 @@ import { RemoveCartItemUseCase } from './application/use-cases/remove-cart-item.
 import { ExpireCartReservationsUseCase } from './application/use-cases/expire-cart-reservations.use-case';
 import { TransitionGuestToAdminUseCase } from './application/use-cases/transition-guest-to-admin.use-case';
 import { CartRepositoryPort } from './domain/ports/cart-repository.port';
+import { CartSessionResolverPort } from './domain/ports/cart-session-resolver.port';
 import { StockReservationPort } from './domain/ports/stock-reservation.port';
 import { ProductLookupPort } from './domain/ports/product-lookup.port';
 import { SessionLookupPort } from './domain/ports/session-lookup.port';
@@ -87,6 +89,11 @@ const transitionGuestToAdminProvider: Provider = {
   ): CartTransitionGuestToAdminPort =>
     new CartTransitionGuestToAdminAdapter(cartRepo, stockReservation),
   inject: [CART_TOKENS.CART_REPOSITORY, CART_TOKENS.STOCK_RESERVATION],
+};
+
+const sessionResolverProvider: Provider = {
+  provide: CART_TOKENS.SESSION_RESOLVER,
+  useClass: CartSessionResolverAdapter,
 };
 
 // ---------------------------------------------------------------------------
@@ -262,6 +269,7 @@ const scheduledReaperProvider: Provider = {
     reaperProvider,
     reaperMetricsProvider,
     transitionGuestToAdminProvider,
+    sessionResolverProvider,
     // Use cases
     getCartUseCaseProvider,
     addCartItemUseCaseProvider,
@@ -277,6 +285,7 @@ const scheduledReaperProvider: Provider = {
     CART_TOKENS.STOCK_RESERVATION,
     CART_TOKENS.SESSION_LOOKUP,
     CART_TOKENS.CLOCK,
+    CART_TOKENS.SESSION_RESOLVER,
     CART_TOKENS.TRANSITION_GUEST_TO_ADMIN,
   ],
 })
