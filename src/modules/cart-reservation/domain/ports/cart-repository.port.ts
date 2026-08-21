@@ -47,6 +47,13 @@ export interface CartRepositoryPort {
   /** Cierra/expira un carrito (promoción guest→admin, reaper). */
   closeCart(sessionId: string): Promise<void>;
 
+  /**
+   * Transfiere el carrito de una sesión guest a otra sesión (promoción
+   * guest→cliente). Re-apunta `carts.session_id` conservando ítems, reservas y
+   * totales. Idempotente: si no existe carrito para la sesión origen, no-op.
+   */
+  transferCartToSession(guestSessionId: string, targetSessionId: string): Promise<void>;
+
   /** Renueva la actividad de una sesión (now + 10m). */
   touchSession(sessionId: string, now: Date): Promise<void>;
 }

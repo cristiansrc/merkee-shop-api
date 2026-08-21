@@ -121,6 +121,7 @@ export class WompiPaymentAdapter implements PaymentProviderPort {
     return {
       providerPaymentId: data.data.id,
       status: mapWompiStatus(data.data.status),
+      checkoutUrl: buildWompiCheckoutUrl(data.data.id),
     };
   }
 
@@ -209,6 +210,15 @@ interface WompiRefundResponse {
     id: string;
     status: string;
   };
+}
+
+/**
+ * Construye la URL de checkout pública de Wompi (Colombia) a partir del ID de
+ * la transacción devuelto por `POST /v1/transactions`. Es el endpoint de
+ * redirección canónico documentado por Wompi para completar el pago.
+ */
+function buildWompiCheckoutUrl(transactionId: string): string {
+  return `https://checkout.wompi.co/p/${transactionId}`;
 }
 
 function mapWompiStatus(status: string): CreatePaymentResult['status'] {

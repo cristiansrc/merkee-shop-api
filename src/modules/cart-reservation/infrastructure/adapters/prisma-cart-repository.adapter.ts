@@ -214,6 +214,20 @@ export class PrismaCartRepositoryAdapter implements CartRepositoryPort {
     });
   }
 
+  async transferCartToSession(
+    guestSessionId: string,
+    targetSessionId: string,
+  ): Promise<void> {
+    // Re-apunta el carrito 1:1 de la sesión guest a la sesión autenticada.
+    // `session_id` es UNIQUE: si la sesión destino ya tuviera carrito la
+    // operación fallaría por restricción, que es el comportamiento seguro
+    // (nunca se fusionan ni se pisan carritos).
+    await this.prisma.cart.updateMany({
+      where: { sessionId: guestSessionId },
+      data: { sessionId: targetSessionId },
+    });
+  }
+
   async touchSession(sessionId: string, now: Date): Promise<void> {
     const newExpires = new Date(now.getTime() + 10 * 60 * 1000);
     await this.prisma.session.update({

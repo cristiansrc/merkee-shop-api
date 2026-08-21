@@ -32,6 +32,12 @@ export interface CreatePaymentRequest {
 export interface CreatePaymentResult {
   readonly providerPaymentId: string;
   readonly status: 'PENDING' | 'APPROVED' | 'DECLINED';
+  /**
+   * URL pública del proveedor a la que el cliente debe ser redirigido para
+   * completar el pago (Wompi: `https://checkout.wompi.co/p/{id}`; Mercado
+   * Pago: `init_point`). Es la fuente del `provider_checkout_url` contractual.
+   */
+  readonly checkoutUrl: string;
 }
 
 /** Solicitud de reembolso. */

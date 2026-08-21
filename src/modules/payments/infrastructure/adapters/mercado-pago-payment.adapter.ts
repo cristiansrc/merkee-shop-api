@@ -121,6 +121,7 @@ export class MercadoPagoPaymentAdapter implements PaymentProviderPort {
     return {
       providerPaymentId: String(data.id),
       status: mapMPStatus(data.status),
+      checkoutUrl: data.init_point ?? '',
     };
   }
 
@@ -196,6 +197,8 @@ export class MercadoPagoPaymentAdapter implements PaymentProviderPort {
 interface MercadoPagoPaymentResponse {
   id: number;
   status: string;
+  /** URL de redirección de checkout que Mercado Pago devuelve en el pago. */
+  init_point?: string;
 }
 
 interface MercadoPagoRefundResponse {

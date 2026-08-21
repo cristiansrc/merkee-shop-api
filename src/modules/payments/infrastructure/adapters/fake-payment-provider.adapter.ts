@@ -62,6 +62,7 @@ export class FakePaymentProviderAdapter implements PaymentProviderPort {
     return {
       providerPaymentId: `fake-${request.idempotencyKey}`,
       status: 'APPROVED',
+      checkoutUrl: `https://checkout.example.test/p/${request.idempotencyKey}`,
     };
   }
 
