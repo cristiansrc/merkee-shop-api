@@ -47,6 +47,7 @@ describe('WompiPaymentAdapter', () => {
 
       expect(result.providerPaymentId).toBe('wompi-tx-123');
       expect(result.status).toBe('APPROVED');
+      expect(result.checkoutUrl).toBe('https://checkout.wompi.co/p/wompi-tx-123');
       expect(mockFetch).toHaveBeenCalledWith(
         'https://api.wompi.co/v1/transactions',
         expect.objectContaining({

@@ -57,6 +57,25 @@ describe('MercadoPagoPaymentAdapter', () => {
       );
     });
 
+    it('devuelve init_point como checkoutUrl', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          id: 12345678,
+          status: 'pending',
+          init_point: 'https://www.mercadopago.com.co/checkout/v1/redirect?pref_id=123',
+        }),
+      });
+
+      const result = await adapter.createPayment({
+        orderId: 'order-1',
+        amountCop: 50000,
+        idempotencyKey: 'idem-key-1',
+      });
+
+      expect(result.checkoutUrl).toBe('https://www.mercadopago.com.co/checkout/v1/redirect?pref_id=123');
+    });
+
     it('mapea status pending correctamente', async () => {
       mockFetch.mockResolvedValue({
         ok: true,
